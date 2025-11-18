@@ -434,6 +434,12 @@ class EmbyScannerSetup:
         else:
             report_lines.append("🎉 恭喜！未发现任何重复项目")
         
+        report_lines.append("")
+        report_lines.append("💡 报告文件位置说明:")
+        report_lines.append(f"报告保存在: {self.script_dir}")
+        report_lines.append("你可以用以下命令查看报告:")
+        report_lines.append(f"cat {os.path.join(self.script_dir, 'emby_library_report_*.txt')}")
+        
         # 生成报告文件
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_file = f"emby_library_report_{timestamp}.txt"
@@ -511,13 +517,4 @@ class EmbyScannerSetup:
             
             self.print_menu("主菜单", menu_options)
             
-            choice = input("请输入选项 [0-5]: ").strip()
-            
-            if choice == "1":
-                if not self.server_url or not self.api_key:
-                    print("❌ 请先配置服务器信息")
-                    input("按回车键继续...")
-                    continue
-                self.run_scanner()
-            elif choice == "2":
-                if self.setup_wizard
+            choice =
