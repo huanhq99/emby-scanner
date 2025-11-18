@@ -9,6 +9,7 @@ import sys
 import subprocess
 import requests
 import json
+import re
 from collections import defaultdict
 from datetime import datetime
 
@@ -20,7 +21,7 @@ class EmbyScannerSetup:
         self.api_key = ""
         self.venv_path = os.path.expanduser("~/emby-scanner-env")
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.version = "2.0"
+        self.version = "2.1"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         
     def clear_screen(self):
@@ -240,7 +241,7 @@ class EmbyScannerSetup:
                 pass
         return False
 
-    # ========================= 扫描功能 =========================
+    # ========================= 真正的重复检测功能 =========================
     
     def get_libraries(self):
         """获取所有媒体库"""
@@ -254,18 +255,261 @@ class EmbyScannerSetup:
             print(f"❌ 获取媒体库失败: {e}")
             return []
     
-    def run_scanner(self):
-        """运行扫描器"""
-        print("\n🚀 开始扫描媒体库...")
-        print("正在连接服务器，请等待...")
+    def get_library_items(self, library_id, item_types='Movie,Series'):
+        """获取媒体库中的项目"""
+        url = f"{self.server_url}/emby/Items"
+        params = {
+            'ParentId': library_id,
+            'Recursive': True,
+            'IncludeItemTypes': item_types,
+            'Fields': 'Path,ProviderIds,Name,Type',
+            'Limit': 1000
+        }
+        
+        all_items = []
+        start_index = 0
+        
+        while True:
+            params['StartIndex'] = start_index
+            try:
+                response = requests.get(url, headers={'X-Emby-Token': self.api_key}, 
+                                      params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                
+                items = data.get('Items', [])
+                if not items:
+                    break
+                
+                all_items.extend(items)
+                start_index += len(items)
+                
+                if len(items) < params['Limit']:
+                    break
+                    
+            except Exception as e:
+                print(f"❌ 获取项目失败: {e}")
+                break
+        
+        return all_items
+    
+    def extract_tmdb_id(self, item):
+        """提取TMDB ID"""
+        provider_ids = item.get('ProviderIds', {})
+        tmdb_id = provider_ids.get('Tmdb')
+        
+        # 从路径中提取TMDB ID
+        if not tmdb_id:
+            path = item.get('Path', '')
+            match = re.search(r'{tmdb-(\d+)}', path)
+            if match:
+                tmdb_id = match.group(1)
+        
+        return str(tmdb_id) if tmdb_id else None
+    
+    def analyze_duplicates(self, items):
+        """分析重复项目"""
+        # 按TMDB ID分组
+        tmdb_groups = defaultdict(list)
+        # 按名称分组（备用检测）
+        name_groups = defaultdict(list)
+        
+        for item in items:
+            item_id = item['Id']
+            item_name = item.get('Name', '未知').strip()
+            item_type = item.get('Type', '未知')
+            path = item.get('Path', '无路径')
+            
+            tmdb_id = self.extract_tmdb_id(item)
+            
+            item_info = {
+                'id': item_id,
+                'name': item_name,
+                'type': item_type,
+                'path': path,
+                'tmdb_id': tmdb_id
+            }
+            
+            # TMDB ID分组
+            if tmdb_id:
+                tmdb_groups[tmdb_id].append(item_info)
+            
+            # 名称分组（用于没有TMDB ID的情况）
+            name_groups[item_name].append(item_info)
+        
+        # 检测重复
+        tmdb_duplicates = []
+        name_duplicates = []
+        
+        for tmdb_id, items_list in tmdb_groups.items():
+            if len(items_list) > 1:
+                tmdb_duplicates.append({
+                    'key': f"TMDB-ID: {tmdb_id}",
+                    'items': items_list
+                })
+        
+        for name, items_list in name_groups.items():
+            if len(items_list) > 1 and name != '未知':
+                # 检查是否真的有重复（排除电视剧季的情况）
+                if len(set(item['path'] for item in items_list)) > 1:
+                    name_duplicates.append({
+                        'key': f"名称: {name}",
+                        'items': items_list
+                    })
+        
+        return tmdb_duplicates, name_duplicates
+    
+    def run_real_scanner(self):
+        """运行真正的重复检测扫描器"""
+        print("\n🚀 开始深度扫描媒体库...")
+        print("正在分析重复内容，请耐心等待...")
         
         libraries = self.get_libraries()
         if not libraries:
             print("❌ 未找到任何媒体库")
-            input("\n按回车键返回主菜单...")
-            return
+            return None
         
-        print(f"✅ 找到 {len(libraries)} 个媒体库")
+        total_stats = defaultdict(int)
+        all_tmdb_duplicates = []
+        all_name_duplicates = []
+        report_lines = []
+        
+        # 报告头部
+        report_lines.append("🎬 Emby媒体库重复检测报告")
+        report_lines.append("=" * 70)
+        report_lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report_lines.append(f"服务器: {self.server_url}")
+        report_lines.append("检测规则: TMDB ID重复 > 名称重复")
+        report_lines.append("")
+        
+        # 扫描电影库
+        movie_libraries = [lib for lib in libraries if any(keyword in lib['Name'].lower() 
+                          for keyword in ['电影', 'movie', 'movies'])]
+        
+        # 扫描电视剧库
+        series_libraries = [lib for lib in libraries if any(keyword in lib['Name'].lower() 
+                            for keyword in ['剧集', 'tv', 'series', '电视剧'])]
+        
+        # 扫描电影
+        if movie_libraries:
+            report_lines.append("🎥 电影库扫描结果")
+            report_lines.append("-" * 50)
+            
+            for library in movie_libraries:
+                lib_name = library['Name']
+                print(f"📁 扫描电影库: {lib_name}")
+                
+                items = self.get_library_items(library['Id'], 'Movie')
+                print(f"   找到 {len(items)} 部电影")
+                
+                if not items:
+                    continue
+                
+                # 统计
+                for item in items:
+                    total_stats['Movie'] += 1
+                
+                # 检测重复
+                tmdb_duplicates, name_duplicates = self.analyze_duplicates(items)
+                
+                # 添加到报告
+                report_lines.append(f"媒体库: {lib_name}")
+                report_lines.append(f"电影数量: {len(items)}")
+                
+                if tmdb_duplicates:
+                    report_lines.append(f"🔴 TMDB ID重复: {len(tmdb_duplicates)} 组")
+                    for dup in tmdb_duplicates:
+                        report_lines.append(f"  {dup['key']} (重复{len(dup['items'])}次)")
+                        for item in dup['items']:
+                            report_lines.append(f"    - {item['name']}")
+                            report_lines.append(f"      路径: {item['path']}")
+                        report_lines.append("")
+                    all_tmdb_duplicates.extend(tmdb_duplicates)
+                
+                if name_duplicates:
+                    report_lines.append(f"🟡 名称重复: {len(name_duplicates)} 组")
+                    for dup in name_duplicates:
+                        report_lines.append(f"  {dup['key']} (重复{len(dup['items'])}次)")
+                    all_name_duplicates.extend(name_duplicates)
+                
+                if not tmdb_duplicates and not name_duplicates:
+                    report_lines.append("✅ 未发现重复电影")
+                
+                report_lines.append("")
+        
+        # 扫描电视剧
+        if series_libraries:
+            report_lines.append("📺 电视剧库扫描结果")
+            report_lines.append("-" * 50)
+            
+            for library in series_libraries:
+                lib_name = library['Name']
+                print(f"📁 扫描电视剧库: {lib_name}")
+                
+                items = self.get_library_items(library['Id'], 'Series')
+                print(f"   找到 {len(items)} 部电视剧")
+                
+                if not items:
+                    continue
+                
+                # 统计
+                for item in items:
+                    total_stats['Series'] += 1
+                
+                # 检测重复
+                tmdb_duplicates, name_duplicates = self.analyze_duplicates(items)
+                
+                # 添加到报告
+                report_lines.append(f"媒体库: {lib_name}")
+                report_lines.append(f"电视剧数量: {len(items)}")
+                
+                if tmdb_duplicates:
+                    report_lines.append(f"🔴 TMDB ID重复: {len(tmdb_duplicates)} 组")
+                    for dup in tmdb_duplicates:
+                        report_lines.append(f"  {dup['key']} (重复{len(dup['items'])}次)")
+                    all_tmdb_duplicates.extend(tmdb_duplicates)
+                
+                if name_duplicates:
+                    report_lines.append(f"🟡 名称重复: {len(name_duplicates)} 组")
+                    for dup in name_duplicates:
+                        report_lines.append(f"  {dup['key']} (重复{len(dup['items'])}次)")
+                    all_name_duplicates.extend(name_duplicates)
+                
+                if not tmdb_duplicates and not name_duplicates:
+                    report_lines.append("✅ 未发现重复电视剧")
+                
+                report_lines.append("")
+        
+        # 总结报告
+        report_lines.append("=" * 70)
+        report_lines.append("📊 扫描统计总结")
+        report_lines.append("=" * 70)
+        
+        total_items = sum(total_stats.values())
+        report_lines.append(f"总计扫描: {total_items} 个项目")
+        for item_type, count in total_stats.items():
+            report_lines.append(f"  {item_type}: {count} 个")
+        
+        report_lines.append("")
+        report_lines.append("🚨 重复检测结果:")
+        report_lines.append(f"   🔴 TMDB ID重复: {len(all_tmdb_duplicates)} 组")
+        report_lines.append(f"    🟡 名称重复: {len(all_name_duplicates)} 组")
+        
+        if all_tmdb_duplicates or all_name_duplicates:
+            report_lines.append("")
+            report_lines.append("💡 处理建议:")
+            report_lines.append("  1. TMDB ID重复: 同一内容的不同版本，建议保留最佳版本")
+            report_lines.append("  2. 名称重复: 可能的内容重复，建议手动检查文件内容")
+        else:
+            report_lines.append("🎉 恭喜！未发现任何重复内容")
+        
+        report_lines.append("")
+        report_lines.append("📁 报告文件位置说明:")
+        report_lines.append(f"  文件保存在: {self.script_dir}")
+        report_lines.append("  查看方法:")
+        report_lines.append("  1. 主菜单 → 查看扫描报告")
+        report_lines.append("  2. 使用命令: cat 报告文件名.txt")
+        report_lines.append("  3. 使用命令: nano 报告文件名.txt")
         
         # 生成报告文件
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -274,26 +518,31 @@ class EmbyScannerSetup:
         
         try:
             with open(report_path, 'w', encoding='utf-8') as f:
-                f.write("Emby媒体库扫描报告\n")
-                f.write("=" * 60 + "\n")
-                f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"服务器: {self.server_url}\n")
-                f.write(f"媒体库数量: {len(libraries)}\n\n")
-                
-                for library in libraries:
-                    f.write(f"媒体库: {library['Name']}\n")
-                    f.write(f"ID: {library['Id']}\n\n")
+                f.write('\n'.join(report_lines))
             
-            print(f"\n✅ 扫描完成！")
-            print(f"📄 报告文件: {report_file}")
-            print(f"📍 文件位置: {self.script_dir}/")
-            print("\n💡 查看报告方法:")
-            print(f"1. 主菜单 → 查看扫描报告")
-            print(f"2. 命令: cat '{report_path}'")
-            print(f"3. 命令: nano '{report_path}'")
-                
+            return report_path
         except Exception as e:
             print(f"❌ 生成报告失败: {e}")
+            return None
+
+    def run_scanner(self):
+        """运行扫描器"""
+        print("\n🚀 开始深度扫描媒体库...")
+        print("正在分析重复内容，请耐心等待...")
+        
+        # 运行真正的重复检测功能
+        report_path = self.run_real_scanner()
+        
+        if report_path:
+            print(f"\n✅ 扫描完成！")
+            print(f"📄 报告文件: {os.path.basename(report_path)}")
+            print(f"📍 文件位置: {self.script_dir}/")
+            print("\n💡 查看报告方法:")
+            print("1. 主菜单 → 查看扫描报告")
+            print(f"2. 命令: cat '{report_path}'")
+            print(f"3. 命令: nano '{report_path}'")
+        else:
+            print("❌ 扫描失败")
         
         input("\n按回车键返回主菜单...")
     
@@ -353,7 +602,7 @@ class EmbyScannerSetup:
                 end = min((current_page + 1) * page_size, len(lines))
                 
                 for i, line in enumerate(lines[start:end], start + 1):
-                    print(f"{i:3d}. {line}")
+                    print(f"{line}")
                 
                 print("=" * 70)
                 if end < len(lines):
@@ -398,7 +647,9 @@ class EmbyScannerSetup:
         
         if reports:
             latest = max(reports, key=lambda f: os.path.getctime(os.path.join(self.script_dir, f)))
+            latest_time = datetime.fromtimestamp(os.path.getctime(os.path.join(self.script_dir, latest)))
             print(f"最新报告: {latest}")
+            print(f"生成时间: {latest_time.strftime('%Y-%m-%d %H:%M')}")
         
         input("\n按回车键返回主菜单...")
     
@@ -410,22 +661,25 @@ class EmbyScannerSetup:
 📖 使用指南
 
 🎯 主要功能:
-- 扫描Emby媒体库信息
-- 生成详细扫描报告
-- 查看历史扫描记录
+-  🔴 TMDB ID重复检测（最准确）
+-  🟡 名称重复检测（备用）
+-  📊 详细扫描报告生成
+-  📁 文件路径清晰显示
+
+🔍 检测规则:
+1. TMDB ID相同 → 确定重复
+2. 名称相同但路径不同 → 可疑重复
+3. 自动区分电影和电视剧
 
 📁 文件位置说明:
 - 配置文件: 当前目录/emby_config.json
 - 扫描报告: 当前目录/emby_library_report_时间戳.txt
 
-🔍 查看报告方法:
-1. 在主菜单中选择「查看扫描报告」
-2. 使用命令查看具体文件
-3. 报告会显示完整文件路径
-
-💡 温馨提示:
+💡 使用技巧:
 - 首次使用需要配置服务器
-- 报告文件保存在脚本同一目录
+- 大型媒体库扫描需要时间
+- 报告会显示完整文件路径
+- 支持查看历史扫描记录
 """)
         input("\n按回车键返回主菜单...")
     
@@ -460,6 +714,7 @@ class EmbyScannerSetup:
             print("⚠️  配置保存失败，下次需要重新输入")
         
         print("\n🎉 初始设置完成！")
+        print("您现在可以使用完整的重复检测功能了。")
         input("\n按回车键进入主菜单...")
         return True
     
@@ -479,7 +734,7 @@ class EmbyScannerSetup:
                 print("配置状态: ❌ 未配置")
             
             menu_options = {
-                "1": "🚀 开始扫描媒体库",
+                "1": "🚀 开始深度扫描（检测重复）",
                 "2": "⚙️  重新配置服务器",
                 "3": "📊 查看扫描报告", 
                 "4": "🔧 系统信息",
