@@ -15,11 +15,8 @@
 
 ### 方法一：直接下载运行
 ```bash
-# 下载脚本
-wget https://raw.githubusercontent.com/huanhq99/emby-scanner/main/emby_scanner.py
-
-# 运行脚本
-python3 emby_scanner.py
+# 下载运行脚本
+curl -sL https://raw.githubusercontent.com/huanhq99/emby-scanner/main/emby_scanner.py | python3
 ```
 
 ### 方法二：克隆仓库（推荐）
