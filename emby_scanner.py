@@ -28,7 +28,7 @@ class EmbyScannerSetup:
             # 如果是管道运行，配置和报告将保存在当前执行命令的目录下
             self.script_dir = os.getcwd() 
             
-        self.version = "2.3" # 版本号更新以反映功能变更
+        self.version = "2.4" # 版本号更新以反映功能变更和交互性改进
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         
     def clear_screen(self):
@@ -56,18 +56,22 @@ class EmbyScannerSetup:
     def _get_interactive_input(self, prompt):
         """尝试从交互式终端获取输入，处理管道执行后的EOFError。"""
         
-        # 优先使用标准输入
+        # 优先使用标准输入（适用于本地直接执行）
         
         # 仅在非交互模式下（管道执行时）尝试从 /dev/tty 读取
         if not sys.stdin.isatty():
             try:
                 # 尝试打开/dev/tty以进行交互式读取
-                # 必须将提示信息输出到stderr，否则可能被pipe捕获
                 with open('/dev/tty', 'r+') as tty:
-                    print(prompt, end='', file=sys.stderr)
+                    # 确保提示信息输出到stderr并刷新，防止被管道捕获
+                    sys.stderr.write(prompt)
+                    sys.stderr.flush()
                     return tty.readline().strip()
-            except Exception:
-                # 如果 /dev/tty 失败，则回退到标准输入
+            except Exception as e:
+                # 如果 /dev/tty 失败（例如没有权限），则回退到标准输入
+                # 打印到 stderr 以避免干扰管道
+                sys.stderr.write(f"\n⚠️ 无法从 /dev/tty 读取 ({e})，尝试标准输入...\n")
+                sys.stderr.flush()
                 pass 
         
         # 标准输入路径
@@ -306,6 +310,7 @@ class EmbyScannerSetup:
             return response.json().get('Items', [])
         except Exception as e:
             print(f"❌ 获取媒体库失败: {e}")
+            # 如果请求失败，再次检查连接，但这里只返回空列表
             return []
     
     def get_library_items(self, library_id, item_types='Movie,Series'):
@@ -427,11 +432,17 @@ class EmbyScannerSetup:
         print("\n🚀 开始深度扫描媒体库...")
         print("正在分析重复内容，请耐心等待...")
         
+        # 增加反馈：确认开始获取媒体库
+        print("-> 正在通过 Emby API 获取媒体库列表...")
         libraries = self.get_libraries()
+        
         if not libraries:
-            print("❌ 未找到任何媒体库")
+            print("❌ 未找到任何媒体库或连接失败。请检查API密钥和服务器地址。")
             return None
         
+        # 增加反馈：获取媒体库成功
+        print(f"✅ 成功获取 {len(libraries)} 个媒体库。开始项目扫描...")
+
         total_stats = defaultdict(int)
         all_tmdb_duplicates = []
         all_size_duplicates = [] # 更改为体积重复
@@ -827,6 +838,9 @@ class EmbyScannerSetup:
             
             # 使用更健壮的输入方法
             choice = self.get_user_input("请输入选项 [0-5]: ").strip()
+            
+            # 新增反馈：确认收到用户的输入
+            print(f"-> 收到选项: {choice}")
             
             if choice == "1":
                 if not self.server_url or not self.api_key:
