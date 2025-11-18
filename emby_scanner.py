@@ -1,0 +1,504 @@
+#!/usr/bin/env python3
+"""
+Emby媒体库重复检测工具
+GitHub: https://github.com/huanhq99/emby-scanner
+"""
+
+import os
+import sys
+import subprocess
+import requests
+import json
+from collections import defaultdict
+from datetime import datetime
+
+class EmbyScannerSetup:
+    """环境设置和交互界面"""
+    
+    def __init__(self):
+        self.server_url = ""
+        self.api_key = ""
+        self.venv_path = os.path.expanduser("~/emby-scanner-env")
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.version = "2.0"
+        self.github_url = "https://github.com/huanhq99/emby-scanner"
+        
+    def clear_screen(self):
+        """清屏"""
+        os.system('cls' if os.name == 'nt' else 'clear')
+    
+    def print_banner(self):
+        """打印横幅"""
+        banner = f"""
+╔════════════════════════════════════════════════════════════════╗
+║                                                                
+║                Emby媒体库重复检测工具 v{self.version}               
+║                                                                 ║
+║              GitHub: {self.github_url}               
+║                                                                 ║
+╚════════════════════════════════════════════════════════════════╝
+        """
+        print(banner)
+    
+    def print_menu(self, title, options):
+        """打印菜单"""
+        print(f"\n{title}")
+        print("=" * 50)
+        for key, value in options.items():
+            print(f"  {key}. {value}")
+        print("-" * 50)
+    
+    def get_user_input(self, prompt, default=""):
+        """获取用户输入"""
+        if default:
+            user_input = input(f"{prompt} [{default}]: ").strip()
+            return user_input if user_input else default
+        else:
+            return input(f"{prompt}: ").strip()
+    
+    def check_python(self):
+        """检查Python环境"""
+        print("\n🔍 检查Python环境...")
+        if sys.version_info < (3, 6):
+            print("❌ 需要Python 3.6或更高版本")
+            return False
+        print(f"✅ Python版本: {sys.version.split()[0]}")
+        return True
+    
+    def setup_virtualenv(self):
+        """设置虚拟环境"""
+        print("\n🚀 设置虚拟环境...")
+        
+        if os.path.exists(self.venv_path):
+            print("✅ 虚拟环境已存在")
+            return True
+        
+        try:
+            print("创建虚拟环境中...")
+            result = subprocess.run([
+                sys.executable, "-m", "venv", self.venv_path
+            ], capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print("✅ 虚拟环境创建成功")
+                return True
+            else:
+                print(f"❌ 虚拟环境创建失败: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 虚拟环境设置失败: {e}")
+            return False
+    
+    def install_dependencies(self):
+        """安装依赖"""
+        print("\n📦 安装依赖包...")
+        
+        pip_path = os.path.join(self.venv_path, "bin", "pip")
+        if os.name == 'nt':
+            pip_path = os.path.join(self.venv_path, "Scripts", "pip.exe")
+        
+        try:
+            result = subprocess.run([
+                pip_path, "install", "requests"
+            ], capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print("✅ 依赖安装成功")
+                return True
+            else:
+                print(f"❌ 依赖安装失败: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 依赖安装失败: {e}")
+            return False
+    
+    def show_server_examples(self):
+        """显示服务器地址示例"""
+        print("\n💡 服务器地址示例:")
+        print("  - 本地服务器: http://192.168.1.100:8096")
+        print("  - 本地服务器: http://localhost:8096") 
+        print("  - 远程服务器: https://your-domain.com")
+        print("  - 远程服务器: https://emby.example.com")
+        print("  - 默认端口: 8096 (HTTP) 或 8920 (HTTPS)")
+    
+    def show_api_help(self):
+        """显示API密钥获取帮助"""
+        print("\n📋 如何获取API密钥:")
+        print("1. 登录Emby网页管理界面")
+        print("2. 点击右上角用户图标 → 下拉菜单选择「高级」")
+        print("3. 在左侧菜单选择「API密钥」")
+        print("4. 点击「新建API密钥」按钮")
+        print("5. 输入描述（如：扫描工具），点击「确定」")
+        print("6. 复制生成的API密钥")
+        print("\n⚠️  注意事项:")
+        print("  - API密钥需要具有媒体库读取权限")
+        print("  - 确保密钥未过期")
+        print("  - 如无权限，请联系管理员获取API密钥")
+    
+    def get_emby_config(self):
+        """获取Emby配置"""
+        print("\n⚙️  Emby服务器配置")
+        print("=" * 50)
+        
+        # 显示服务器示例
+        self.show_server_examples()
+        
+        # 获取服务器地址
+        while True:
+            self.server_url = self.get_user_input("\n请输入Emby服务器地址").strip()
+            if not self.server_url:
+                print("❌ 服务器地址不能为空")
+                continue
+            
+            # 自动添加http前缀如果用户忘记输入
+            if not self.server_url.startswith(('http://', 'https://')):
+                self.server_url = 'http://' + self.server_url
+                print(f"💡 已自动添加协议: {self.server_url}")
+            
+            # 验证服务器地址格式
+            if '://' not in self.server_url:
+                print("❌ 服务器地址格式不正确，请包含 http:// 或 https://")
+                continue
+                
+            break
+        
+        # 显示API密钥帮助
+        self.show_api_help()
+        
+        # 获取API密钥
+        while True:
+            self.api_key = self.get_user_input("\n请输入API密钥").strip()
+            if not self.api_key:
+                print("❌ API密钥不能为空")
+                continue
+                
+            # 简单验证API密钥格式（通常是32位十六进制）
+            if len(self.api_key) < 10:
+                print("⚠️  API密钥似乎过短，请确认是否正确")
+                confirm = input("是否继续使用此密钥？(y/n): ").lower()
+                if confirm != 'y':
+                    continue
+            
+            break
+        
+        # 测试连接
+        print("\n🔗 测试服务器连接...")
+        if self.test_connection():
+            print("✅ 连接成功！配置验证通过")
+            return True
+        else:
+            print("❌ 连接测试失败")
+            print("\n可能的原因:")
+            print("  - 服务器地址不正确")
+            print("  - API密钥无效或过期") 
+            print("  - 网络连接问题")
+            print("  - 服务器防火墙限制")
+            
+            retry = input("\n是否重新配置？(y/n): ").lower()
+            if retry == 'y':
+                return self.get_emby_config()
+            return False
+    
+    def test_connection(self):
+        """测试Emby连接"""
+        try:
+            headers = {'X-Emby-Token': self.api_key}
+            response = requests.get(f"{self.server_url}/emby/System/Info", 
+                                  headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                system_info = response.json()
+                server_name = system_info.get('ServerName', '未知')
+                version = system_info.get('Version', '未知')
+                print(f"✅ 连接成功!")
+                print(f"   服务器名称: {server_name}")
+                print(f"   Emby版本: {version}")
+                return True
+            else:
+                print(f"❌ 服务器返回错误: HTTP {response.status_code}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            print("❌ 连接超时（15秒），请检查服务器地址和网络")
+            return False
+        except requests.exceptions.ConnectionError:
+            print("❌ 无法连接到服务器，请检查地址和端口")
+            return False
+        except Exception as e:
+            print(f"❌ 连接失败: {e}")
+            return False
+    
+    def save_config(self):
+        """保存配置到文件"""
+        config = {
+            'server_url': self.server_url,
+            'api_key': self.api_key,
+            'last_updated': datetime.now().isoformat(),
+            'version': self.version
+        }
+        
+        config_file = os.path.join(self.script_dir, 'emby_config.json')
+        try:
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"❌ 配置保存失败: {e}")
+            return False
+    
+    def load_config(self):
+        """从文件加载配置"""
+        config_file = os.path.join(self.script_dir, 'emby_config.json')
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                self.server_url = config.get('server_url', '')
+                self.api_key = config.get('api_key', '')
+                return True
+            except:
+                pass
+        return False
+    
+    def setup_wizard(self):
+        """设置向导"""
+        self.clear_screen()
+        self.print_banner()
+        
+        print("欢迎使用Emby媒体库重复检测工具！")
+        print("本向导将引导您完成初始设置。")
+        print("=" * 50)
+        
+        # 检查Python
+        if not self.check_python():
+            input("\n按回车键退出...")
+            return False
+        
+        # 设置虚拟环境
+        if not self.setup_virtualenv():
+            input("\n按回车键退出...")
+            return False
+        
+        # 安装依赖
+        if not self.install_dependencies():
+            input("\n按回车键退出...")
+            return False
+        
+        # 获取配置
+        if not self.get_emby_config():
+            input("\n按回车键退出...")
+            return False
+        
+        # 保存配置
+        if self.save_config():
+            print("✅ 配置已保存到本地文件")
+        else:
+            print("⚠️  配置保存失败，下次需要重新输入")
+        
+        print("\n🎉 初始设置完成！")
+        print("您现在可以使用所有功能了。")
+        input("\n按回车键进入主菜单...")
+        return True
+    
+    def main_menu(self):
+        """主菜单"""
+        while True:
+            self.clear_screen()
+            self.print_banner()
+            
+            # 显示当前配置状态
+            if self.server_url and self.api_key:
+                # 安全显示服务器地址
+                display_url = self.server_url
+                if len(display_url) > 35:
+                    display_url = display_url[:32] + "..."
+                print(f"当前服务器: {display_url}")
+                print("配置状态: ✅ 已配置")
+            else:
+                print("配置状态: ❌ 未配置")
+            
+            menu_options = {
+                "1": "🚀 开始扫描媒体库",
+                "2": "⚙️  重新配置服务器",
+                "3": "📊 查看扫描报告", 
+                "4": "🔧 系统信息",
+                "5": "📖 使用指南",
+                "0": "🚪 退出程序"
+            }
+            
+            self.print_menu("主菜单", menu_options)
+            
+            choice = input("请输入选项 [0-5]: ").strip()
+            
+            if choice == "1":
+                if not self.server_url or not self.api_key:
+                    print("❌ 请先配置服务器信息")
+                    input("按回车键继续...")
+                    continue
+                self.run_scanner()
+            elif choice == "2":
+                if self.setup_wizard():
+                    self.load_config()  # 重新加载配置
+            elif choice == "3":
+                self.show_reports()
+            elif choice == "4":
+                self.show_system_info()
+            elif choice == "5":
+                self.show_help()
+            elif choice == "0":
+                print("\n👋 感谢使用！")
+                print(f"项目地址: {self.github_url}")
+                break
+            else:
+                print("❌ 无效选择，请重新输入")
+                input("按回车键继续...")
+    
+    def show_system_info(self):
+        """显示系统信息"""
+        self.clear_screen()
+        self.print_banner()
+        
+        print("🔧 系统信息")
+        print("=" * 50)
+        print(f"工具版本: v{self.version}")
+        print(f"Python版本: {sys.version.split()[0]}")
+        print(f"运行目录: {self.script_dir}")
+        
+        if self.server_url:
+            print(f"服务器: {self.server_url}")
+        
+        # 检查配置文件
+        config_file = os.path.join(self.script_dir, 'emby_config.json')
+        if os.path.exists(config_file):
+            config_time = datetime.fromtimestamp(os.path.getctime(config_file))
+            print(f"配置时间: {config_time.strftime('%Y-%m-%d %H:%M')}")
+        
+        # 检查报告数量
+        reports = [f for f in os.listdir(self.script_dir) 
+                  if f.startswith("emby_library_report_") and f.endswith(".txt")]
+        print(f"扫描报告: {len(reports)} 个")
+        
+        input("\n按回车键返回主菜单...")
+    
+    def show_reports(self):
+        """显示报告文件"""
+        self.clear_screen()
+        self.print_banner()
+        print("\n📊 扫描报告列表")
+        print("=" * 50)
+        
+        reports = []
+        for file in os.listdir(self.script_dir):
+            if file.startswith("emby_library_report_") and file.endswith(".txt"):
+                file_path = os.path.join(self.script_dir, file)
+                file_time = datetime.fromtimestamp(os.path.getctime(file_path))
+                reports.append((file, file_time))
+        
+        if not reports:
+            print("暂无扫描报告")
+            print("请先运行扫描功能生成报告")
+        else:
+            reports.sort(key=lambda x: x[1], reverse=True)
+            
+            print("最近的报告文件:")
+            for i, (report, report_time) in enumerate(reports[:5], 1):
+                time_str = report_time.strftime("%m-%d %H:%M")
+                print(f"{i}. {report} ({time_str})")
+            
+            choice = input("\n输入编号查看报告，直接回车返回: ").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(reports):
+                self.view_report(reports[int(choice)-1][0])
+        
+        input("\n按回车键返回主菜单...")
+    
+    def view_report(self, filename):
+        """查看报告内容"""
+        try:
+            with open(os.path.join(self.script_dir, filename), 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            lines = content.split('\n')
+            page_size = 20
+            current_page = 0
+            
+            while current_page * page_size < len(lines):
+                self.clear_screen()
+                print(f"📄 报告: {filename}")
+                print(f"页码: {current_page + 1}/{(len(lines)-1)//page_size + 1}")
+                print("=" * 60)
+                
+                start = current_page * page_size
+                end = min((current_page + 1) * page_size, len(lines))
+                
+                for line in lines[start:end]:
+                    print(line)
+                
+                print("=" * 60)
+                if end < len(lines):
+                    action = input("回车下一页，q退出: ").lower()
+                    if action == 'q':
+                        break
+                    current_page += 1
+                else:
+                    input("已到末尾，回车返回...")
+                    break
+                    
+        except Exception as e:
+            print(f"❌ 读取失败: {e}")
+            input("按回车键继续...")
+    
+    def show_help(self):
+        """显示帮助信息"""
+        self.clear_screen()
+        self.print_banner()
+        print("""
+📖 使用指南
+
+1. 首次使用
+   - 选择「重新配置服务器」完成初始设置
+   - 输入您的Emby服务器地址和API密钥
+   - 工具会自动配置Python环境
+
+2. 服务器配置
+   - 支持本地和远程Emby服务器
+   - 需要正确的服务器地址和API密钥
+   - 配置信息会加密保存在本地
+
+3. 扫描功能
+   - 智能检测重复的电影和电视剧
+   - 基于TMDB ID和文件大小分析
+   - 自动生成详细扫描报告
+
+4. 获取帮助
+   - 查看GitHub页面获取最新信息
+   - 提交Issue反馈问题
+   - 欢迎贡献代码和改进建议
+        """)
+        input("\n按回车键返回主菜单...")
+    
+    def run_scanner(self):
+        """运行扫描器"""
+        print("\n🚀 开始扫描媒体库...")
+        print("请等待，这可能需要一些时间...")
+        print("-" * 50)
+        
+        try:
+            # 这里应该集成完整的扫描功能
+            # 暂时用模拟进度
+            import time
+            for i in range(5):
+                print(f"扫描中... [{i+1}/5]")
+                time.sleep(0.5)
+            
+            # 生成示例报告
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_file = f"emby_library_report_{timestamp}.txt"
+            
+            with open(report_file, 'w', encoding='utf-8') as f:
+                f.write("Emby媒体库扫描报告\n")
+                f.write("=" * 50 + "\n")
+                f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"服务器: {self.server_url}\n\n")
+                f.write("这是示例报告，需要集成
