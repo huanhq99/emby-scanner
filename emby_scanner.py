@@ -21,14 +21,17 @@ class EmbyScannerSetup:
         self.api_key = ""
         self.venv_path = os.path.expanduser("~/emby-scanner-env")
         
-        # 尝试获取脚本所在目录，如果通过管道运行(__file__未定义)，则使用当前工作目录
+        # 优先级 1: 脚本自身的绝对路径 (本地直接执行)
         try:
             self.script_dir = os.path.dirname(os.path.abspath(__file__))
         except NameError:
-            # 如果是管道运行，配置和报告将保存在当前执行命令的目录下
-            self.script_dir = os.getcwd() 
+            # 优先级 2 (单行命令执行): 强制使用用户家目录的绝对路径，这在VPS上通常是 /root
+            self.script_dir = os.path.expanduser('~')
+        
+        # 统一使用一个专用的子目录来存储配置和报告，避免 /dev/fd 路径问题
+        self.data_dir = os.path.join(self.script_dir, "emby_scanner_data")
             
-        self.version = "2.5" # 版本号更新，简化输入逻辑
+        self.version = "2.7" # 版本号更新，修复配置存储路径问题
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         
     def clear_screen(self):
@@ -57,7 +60,13 @@ class EmbyScannerSetup:
         """获取用户输入 (简化版，依赖 Shell 传入 TTY)"""
         full_prompt = f"{prompt} [{default}]: " if default else f"{prompt}: "
         try:
-            user_input = input(full_prompt).strip()
+            # 增加 sys.stdout.flush() 确保提示立即显示，防止输入卡顿
+            sys.stdout.write(full_prompt)
+            sys.stdout.flush()
+            
+            # 使用 sys.stdin.readline() 依赖 shell 解决输入问题
+            user_input = sys.stdin.readline().strip()
+            
             return user_input if user_input else default
         except EOFError:
             print("\n❌ 错误: 交互式输入流已关闭 (EOFError)。请使用完整命令确保输入来自终端。", file=sys.stderr)
@@ -67,7 +76,10 @@ class EmbyScannerSetup:
 
     def _prompt_continue(self, prompt="按回车键继续..."):
         """简单的按键继续提示"""
-        self.get_user_input(f"\n{prompt}")
+        # 使用 sys.stdin.readline() 依赖 shell 解决输入问题
+        sys.stdout.write(f"\n{prompt}")
+        sys.stdout.flush()
+        sys.stdin.readline()
     
     def check_python(self):
         """检查Python环境"""
@@ -235,18 +247,20 @@ class EmbyScannerSetup:
             'version': self.version
         }
         
-        config_file = os.path.join(self.script_dir, 'emby_config.json')
+        # 使用统一的数据目录
+        config_file = os.path.join(self.data_dir, 'emby_config.json')
         try:
             with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
             return True
         except Exception as e:
+            # 打印完整的错误信息，以便用户检查权限或路径
             print(f"❌ 配置保存失败: {e}")
             return False
     
     def load_config(self):
         """从文件加载配置"""
-        config_file = os.path.join(self.script_dir, 'emby_config.json')
+        config_file = os.path.join(self.data_dir, 'emby_config.json')
         if os.path.exists(config_file):
             try:
                 with open(config_file, 'r', encoding='utf-8') as f:
@@ -427,6 +441,7 @@ class EmbyScannerSetup:
         report_lines.append("=" * 70)
         report_lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         report_lines.append(f"服务器: {self.server_url}")
+        report_lines.append(f"报告存储路径: {self.data_dir}") # 明确告知报告存储路径
         report_lines.append("检测规则: TMDB ID重复 > 文件体积重复") # 更新检测规则描述
         report_lines.append("")
         
@@ -571,7 +586,7 @@ class EmbyScannerSetup:
         
         report_lines.append("")
         report_lines.append("📁 报告文件位置说明:")
-        report_lines.append(f"  文件保存在: {self.script_dir}")
+        report_lines.append(f"  文件保存在: {self.data_dir}/") # 使用 data_dir
         report_lines.append("  查看方法:")
         report_lines.append("  1. 主菜单 → 查看扫描报告")
         report_lines.append("  2. 使用命令: cat 报告文件名.txt")
@@ -580,16 +595,301 @@ class EmbyScannerSetup:
         # 生成报告文件
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_file = f"emby_library_report_{timestamp}.txt"
-        report_path = os.path.join(self.script_dir, report_file)
+        report_path = os.path.join(self.data_dir, report_file) # 使用 data_dir
         
         try:
             with open(report_path, 'w', encoding='utf-8') as f:
-                f.write('\n这一步很关键，我把脚本的复杂输入逻辑去掉了。
-                现在需要你在命令行中执行一个更精确的命令，才能确保Python执行的是脚本内容，而不是进入交互模式。
+                f.write('\n'.join(report_lines))
+            
+            return report_path
+        except Exception as e:
+            print(f"❌ 生成报告失败: {e}")
+            return None
 
-### 正确的单行运行命令
+    def run_scanner(self):
+        """运行扫描器"""
+        print("\n🚀 开始深度扫描媒体库...")
+        print("正在分析重复内容，请耐心等待...")
+        
+        # 运行真正的重复检测功能
+        report_path = self.run_real_scanner()
+        
+        if report_path:
+            print(f"\n✅ 扫描完成！")
+            print(f"📄 报告文件: {os.path.basename(report_path)}")
+            print(f"📍 文件位置: {self.data_dir}/") # 使用 data_dir
+            print("\n💡 查看报告方法:")
+            print("1. 主菜单 → 查看扫描报告")
+            print(f"2. 命令: cat '{report_path}'")
+            print(f"3. 命令: nano '{report_path}'")
+        else:
+            print("❌ 扫描失败")
+        
+        self._prompt_continue("按回车键返回主菜单...")
+    
+    def show_reports(self):
+        """显示报告文件"""
+        self.clear_screen()
+        self.print_banner()
+        print("\n📊 扫描报告列表")
+        print("=" * 50)
+        
+        # 从 data_dir 读取报告
+        reports = []
+        if not os.path.exists(self.data_dir):
+             print("暂无扫描报告")
+             print("请先运行扫描功能生成报告")
+             self._prompt_continue("按回车键返回主菜单...")
+             return
+             
+        for file in os.listdir(self.data_dir):
+            if file.startswith("emby_library_report_") and file.endswith(".txt"):
+                file_path = os.path.join(self.data_dir, file) # 使用 data_dir
+                file_time = datetime.fromtimestamp(os.path.getctime(file_path))
+                file_size = os.path.getsize(file_path)
+                reports.append((file, file_time, file_size))
+        
+        if not reports:
+            print("暂无扫描报告")
+            print("请先运行扫描功能生成报告")
+        else:
+            reports.sort(key=lambda x: x[1], reverse=True)
+            
+            print(f"找到 {len(reports)} 个报告文件:")
+            for i, (report, report_time, size) in enumerate(reports[:10], 1):
+                time_str = report_time.strftime("%Y-%m-%d %H:%M")
+                size_kb = size / 1024
+                print(f"{i}. {report}")
+                print(f"   时间: {time_str} | 大小: {size_kb:.1f}KB")
+            
+            choice = self.get_user_input("\n输入报告编号查看，或按回车返回: ").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(reports):
+                self.view_report(reports[int(choice)-1][0])
+        
+        self._prompt_continue("按回车键返回主菜单...")
+    
+    def view_report(self, filename):
+        """查看报告内容"""
+        file_path = os.path.join(self.data_dir, filename) # 使用 data_dir
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            lines = content.split('\n')
+            page_size = 20
+            current_page = 0
+            
+            while current_page * page_size < len(lines):
+                self.clear_screen()
+                print(f"📄 报告文件: {filename}")
+                print(f"📍 文件路径: {file_path}")
+                print(f"📄 页码: {current_page + 1}/{(len(lines)-1)//page_size + 1}")
+                print("=" * 70)
+                
+                start = current_page * page_size
+                end = min((current_page + 1) * page_size, len(lines))
+                
+                for i, line in enumerate(lines[start:end], start + 1):
+                    print(f"{line}")
+                
+                print("=" * 70)
+                if end < len(lines):
+                    # 使用 get_user_input 代替 _get_interactive_input
+                    action = self.get_user_input("回车下一页，q退出，f查看文件路径").lower()
+                    if action == 'q':
+                        break
+                    elif action == 'f':
+                        print(f"\n📁 报告文件完整路径: {file_path}")
+                        print("💡 你可以用以下命令查看:")
+                        print(f"   cat '{file_path}'")
+                        print(f"   nano '{file_path}'")
+                        self._prompt_continue("按回车继续...")
+                    else:
+                        current_page += 1
+                else:
+                    print(f"\n📁 报告文件完整路径: {file_path}")
+                    self._prompt_continue("已到报告末尾，按回车返回...")
+                    break
+                    
+        except Exception as e:
+            print(f"❌ 读取报告失败: {e}")
+            self._prompt_continue("按回车键继续...")
+    
+    def show_system_info(self):
+        """显示系统信息"""
+        self.clear_screen()
+        self.print_banner()
+        
+        print("🔧 系统信息")
+        print("=" * 50)
+        print(f"工具版本: v{self.version}")
+        print(f"Python版本: {sys.version.split()[0]}")
+        print(f"数据目录: {self.data_dir}") # 明确显示数据目录
+        
+        if self.server_url:
+            print(f"服务器: {self.server_url}")
+        
+        # 检查报告文件
+        reports = []
+        if os.path.exists(self.data_dir):
+            reports = [f for f in os.listdir(self.data_dir) 
+                      if f.startswith("emby_library_report_") and f.endswith(".txt")]
+        
+        print(f"报告文件: {len(reports)} 个")
+        
+        if reports:
+            latest = max(reports, key=lambda f: os.path.getctime(os.path.join(self.data_dir, f)))
+            latest_time = datetime.fromtimestamp(os.path.getctime(os.path.join(self.data_dir, latest)))
+            print(f"最新报告: {latest}")
+            print(f"生成时间: {latest_time.strftime('%Y-%m-%d %H:%M')}")
+        
+        self._prompt_continue("按回车键返回主菜单...")
+    
+    def show_help(self):
+        """显示帮助信息"""
+        self.clear_screen()
+        self.print_banner()
+        print(f"""
+📖 使用指南
 
-请使用以下命令，它通过 `/dev/stdin` **告诉 Python 脚本内容在哪里**，并用 `< /dev/tty` **将终端输入重定向给脚本**：
+🎯 主要功能:
+-  🔴 TMDB ID重复检测（最准确）
+-  🟡 文件体积重复检测（辅助查重）
+-  📊 详细扫描报告生成，包含文件体积和路径
+-  📁 文件路径清晰显示
 
-```bash
-curl -sL [https://raw.githubusercontent.com/huanhq99/emby-scanner/main/emby_scanner.py](https://raw.githubusercontent.com/huanhq99/emby-scanner/main/emby_scanner.py) | python3 -u /dev/stdin < /dev/tty
+🔍 检测规则:
+1. TMDB ID相同 → 确定重复
+2. 文件体积完全相同（且没有TMDB ID）→ 可疑重复
+3. 自动区分电影和电视剧
+
+📁 文件位置说明:
+- 所有文件（配置和报告）都保存在以下子目录中:
+  -> 绝对路径: {self.data_dir}/
+
+💡 使用技巧:
+- 首次使用需要配置服务器
+- 大型媒体库扫描需要时间
+- 报告会显示完整文件路径和文件体积
+- 支持查看历史扫描记录
+""")
+        self._prompt_continue("按回车键返回主菜单...")
+    
+    def setup_wizard(self):
+        """设置向导"""
+        self.clear_screen()
+        self.print_banner()
+        
+        print("欢迎使用Emby媒体库重复检测工具！")
+        print("本向导将引导您完成初始设置。")
+        print("=" * 50)
+        
+        if not self.check_python():
+            self._prompt_continue("按回车键退出...")
+            return False
+        
+        if not self.setup_virtualenv():
+            self._prompt_continue("按回车键退出...")
+            return False
+        
+        if not self.install_dependencies():
+            self._prompt_continue("按回车键退出...")
+            return False
+        
+        if not self.get_emby_config():
+            self._prompt_continue("按回车键退出...")
+            return False
+        
+        if self.save_config():
+            print(f"✅ 配置已保存到本地文件: {self.data_dir}/emby_config.json")
+        else:
+            print("⚠️  配置保存失败，下次需要重新输入")
+        
+        print("\n🎉 初始设置完成！")
+        print("您现在可以使用完整的重复检测功能了。")
+        self._prompt_continue("按回车键进入主菜单...")
+        return True
+    
+    def main_menu(self):
+        """主菜单"""
+        while True:
+            self.clear_screen()
+            self.print_banner()
+            
+            if self.server_url and self.api_key:
+                display_url = self.server_url
+                if len(display_url) > 35:
+                    display_url = display_url[:32] + "..."
+                print(f"当前服务器: {display_url}")
+                print("配置状态: ✅ 已配置")
+            else:
+                print("配置状态: ❌ 未配置")
+            
+            print(f"文件存储目录: {self.data_dir}") # 在主菜单显示数据目录
+            
+            menu_options = {
+                "1": "🚀 开始深度扫描（检测重复）",
+                "2": "⚙️  重新配置服务器",
+                "3": "📊 查看扫描报告", 
+                "4": "🔧 系统信息",
+                "5": "📖 使用指南",
+                "0": "🚪 退出程序"
+            }
+            
+            self.print_menu("主菜单", menu_options)
+            
+            # 使用更健壮的输入方法
+            choice = self.get_user_input("请输入选项 [0-5]: ").strip()
+            
+            # 新增反馈：确认收到用户的输入
+            print(f"-> 收到选项: {choice}")
+            
+            if choice == "1":
+                if not self.server_url or not self.api_key:
+                    print("❌ 请先配置服务器信息")
+                    self._prompt_continue()
+                    continue
+                self.run_scanner()
+            elif choice == "2":
+                if self.setup_wizard():
+                    self.load_config()
+            elif choice == "3":
+                self.show_reports()
+            elif choice == "4":
+                self.show_system_info()
+            elif choice == "5":
+                self.show_help()
+            elif choice == "0":
+                print("\n👋 感谢使用！")
+                print(f"项目地址: {self.github_url}")
+                break
+            else:
+                print("❌ 无效选择，请重新输入")
+                self._prompt_continue()
+
+def main():
+    """主函数"""
+    setup = EmbyScannerSetup()
+    
+    # 在进行任何文件操作之前，创建数据目录
+    if not os.path.exists(setup.data_dir):
+        try:
+            os.makedirs(setup.data_dir, exist_ok=True)
+            print(f"✅ 创建数据存储目录: {setup.data_dir}")
+        except Exception as e:
+            print(f"❌ 无法创建数据存储目录: {setup.data_dir}。请检查权限。错误: {e}")
+            return
+            
+    # 尝试加载现有配置
+    setup.load_config()
+    
+    # 如果未配置，运行设置向导
+    if not setup.server_url or not setup.api_key:
+        if not setup.setup_wizard():
+            return
+    
+    # 显示主菜单
+    setup.main_menu()
+
+if __name__ == "__main__":
+    main()
