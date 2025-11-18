@@ -21,32 +21,20 @@ class EmbyScannerSetup:
         self.api_key = ""
         self.venv_path = os.path.expanduser("~/emby-scanner-env")
         
-        # 步骤 1: 确定 HOME 目录作为最安全的默认路径
+        # 最终修复 (v2.10): 彻底忽略 __file__ 和 os.path.dirname 
+        # 强制依赖 $HOME 环境变量来确定路径，这是远程环境中唯一可靠的起点。
         home_dir = os.environ.get('HOME')
         if home_dir:
-            default_script_dir = home_dir
+            self.script_dir = home_dir
         else:
-            default_script_dir = os.path.expanduser('~')
-        
-        self.script_dir = default_script_dir # 默认设置为家目录
-        
-        # 步骤 2: 尝试获取脚本自身的路径，并严格检查是否是临时路径
-        try:
-            temp_script_dir = os.path.dirname(os.path.abspath(__file__))
+            # 备用方案：使用 Python 的 home 目录扩展
+            self.script_dir = os.path.expanduser('~') 
             
-            # 只有在路径看起来"干净"时，才使用它。
-            # 检查：如果路径包含 /fd/ 或 /proc/self/fd/，说明是通过管道运行，忽略它，使用默认的 HOME 路径。
-            if '/fd/' not in temp_script_dir and '/proc/self/fd/' not in temp_script_dir:
-                self.script_dir = temp_script_dir
-                
-        except (NameError, ValueError):
-            # 如果 __file__ 未定义，则保持使用默认的 HOME 路径。
-            pass
-            
-        # 步骤 3: 统一使用一个专用的子目录来存储配置和报告，确保可写权限
+        # 统一使用一个专用的子目录来存储配置和报告，确保可写权限
+        # 这将确保路径为 /root/emby_scanner_data (如果用户是 root)
         self.data_dir = os.path.join(self.script_dir, "emby_scanner_data")
             
-        self.version = "2.9" # 版本号更新，最终路径修复
+        self.version = "2.10" # 版本号更新，最终 HOME 路径修复
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         
     def clear_screen(self):
