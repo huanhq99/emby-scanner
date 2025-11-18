@@ -52,6 +52,17 @@ class EmbyScannerSetup:
             return user_input if user_input else default
         else:
             return input(f"{prompt}: ").strip()
+
+    def format_file_size(self, size_bytes):
+        """格式化文件大小"""
+        if not size_bytes:
+            return "未知大小"
+        
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.2f} PB"
     
     def check_python(self):
         """检查Python环境"""
@@ -239,6 +250,205 @@ class EmbyScannerSetup:
             except:
                 pass
         return False
+
+    # ========================= 真正的扫描功能 =========================
+    
+    def get_libraries(self):
+        """获取所有媒体库"""
+        try:
+            headers = {'X-Emby-Token': self.api_key}
+            response = requests.get(f"{self.server_url}/emby/Library/MediaFolders", 
+                                  headers=headers, timeout=30)
+            response.raise_for_status()
+            return response.json().get('Items', [])
+        except Exception as e:
+            print(f"❌ 获取媒体库失败: {e}")
+            return []
+    
+    def get_library_items(self, library_id, item_types='Movie,Series'):
+        """获取媒体库中的项目"""
+        url = f"{self.server_url}/emby/Items"
+        params = {
+            'ParentId': library_id,
+            'Recursive': True,
+            'IncludeItemTypes': item_types,
+            'Fields': 'Path,ProviderIds',
+            'Limit': 1000
+        }
+        
+        all_items = []
+        start_index = 0
+        
+        while True:
+            params['StartIndex'] = start_index
+            try:
+                response = requests.get(url, headers={'X-Emby-Token': self.api_key}, 
+                                      params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                
+                items = data.get('Items', [])
+                if not items:
+                    break
+                
+                all_items.extend(items)
+                start_index += len(items)
+                
+                if len(items) < params['Limit']:
+                    break
+                    
+            except Exception as e:
+                print(f"❌ 获取项目失败: {e}")
+                break
+        
+        return all_items
+    
+    def extract_tmdb_id(self, item):
+        """提取TMDB ID"""
+        provider_ids = item.get('ProviderIds', {})
+        tmdb_id = provider_ids.get('Tmdb')
+        
+        # 从路径中提取TMDB ID
+        if not tmdb_id:
+            path = item.get('Path', '')
+            import re
+            match = re.search(r'{tmdb-(\d+)}', path)
+            if match:
+                tmdb_id = match.group(1)
+        
+        return str(tmdb_id) if tmdb_id else None
+    
+    def analyze_duplicates(self, items):
+        """分析重复项目"""
+        tmdb_groups = defaultdict(list)
+        
+        for item in items:
+            item_id = item['Id']
+            item_name = item.get('Name', '未知')
+            item_type = item.get('Type', '未知')
+            path = item.get('Path', '无路径')
+            
+            tmdb_id = self.extract_tmdb_id(item)
+            
+            if tmdb_id:
+                item_info = {
+                    'id': item_id,
+                    'name': item_name,
+                    'type': item_type,
+                    'path': path,
+                    'tmdb_id': tmdb_id
+                }
+                tmdb_groups[tmdb_id].append(item_info)
+        
+        duplicates = []
+        for tmdb_id, items_list in tmdb_groups.items():
+            if len(items_list) > 1:
+                duplicates.append({
+                    'tmdb_id': tmdb_id,
+                    'items': items_list
+                })
+        
+        return duplicates
+    
+    def run_real_scanner(self):
+        """运行真正的扫描器"""
+        print("\n🚀 开始扫描媒体库...")
+        print("正在连接服务器，请等待...")
+        
+        libraries = self.get_libraries()
+        if not libraries:
+            print("❌ 未找到任何媒体库")
+            return None
+        
+        total_stats = defaultdict(int)
+        all_duplicates = []
+        report_lines = []
+        
+        # 报告头部
+        report_lines.append("Emby媒体库重复检测报告")
+        report_lines.append("=" * 60)
+        report_lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report_lines.append(f"服务器: {self.server_url}")
+        report_lines.append("")
+        
+        for library in libraries:
+            lib_name = library['Name']
+            print(f"📁 扫描媒体库: {lib_name}")
+            
+            # 根据库类型设置扫描项目类型
+            if lib_name.lower() in ['电影', 'movies', 'movie']:
+                item_types = 'Movie'
+            elif lib_name.lower() in ['剧集', 'tv', 'series', '电视剧']:
+                item_types = 'Series'
+            else:
+                item_types = 'Movie,Series'
+            
+            items = self.get_library_items(library['Id'], item_types)
+            print(f"   找到 {len(items)} 个项目")
+            
+            if not items:
+                continue
+            
+            # 统计
+            lib_stats = defaultdict(int)
+            for item in items:
+                item_type = item['Type']
+                lib_stats[item_type] += 1
+                total_stats[item_type] += 1
+            
+            # 检测重复
+            duplicates = self.analyze_duplicates(items)
+            
+            # 添加到报告
+            report_lines.append(f"媒体库: {lib_name}")
+            report_lines.append(f"项目数量: {len(items)}")
+            for item_type, count in lib_stats.items():
+                report_lines.append(f"  {item_type}: {count}")
+            
+            if duplicates:
+                report_lines.append(f"🔴 发现 {len(duplicates)} 组重复项目:")
+                for dup in duplicates:
+                    report_lines.append(f"  TMDB-ID: {dup['tmdb_id']} (重复{len(dup['items'])}次)")
+                    for item in dup['items']:
+                        report_lines.append(f"    - {item['name']} ({item['type']})")
+                    report_lines.append("")
+                all_duplicates.extend(duplicates)
+            else:
+                report_lines.append("✅ 未发现重复项目")
+            
+            report_lines.append("")
+        
+        # 总结
+        report_lines.append("=" * 60)
+        report_lines.append("📊 统计总结")
+        report_lines.append("=" * 60)
+        
+        for item_type, count in total_stats.items():
+            report_lines.append(f"{item_type}: {count}")
+        
+        total_items = sum(total_stats.values())
+        report_lines.append(f"总计: {total_items} 个项目")
+        
+        if all_duplicates:
+            report_lines.append(f"🚨 总共发现 {len(all_duplicates)} 组重复项目")
+        else:
+            report_lines.append("🎉 恭喜！未发现任何重复项目")
+        
+        # 生成报告文件
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_file = f"emby_library_report_{timestamp}.txt"
+        report_path = os.path.join(self.script_dir, report_file)
+        
+        try:
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(report_lines))
+            
+            return report_path
+        except Exception as e:
+            print(f"❌ 生成报告失败: {e}")
+            return None
+
+    # ========================= 主程序功能 =========================
     
     def setup_wizard(self):
         """设置向导"""
@@ -288,10 +498,10 @@ class EmbyScannerSetup:
                 print(f"当前服务器: {display_url}")
                 print("配置状态: ✅ 已配置")
             else:
-                print("配置状态: ❌ 未配置")
+                print("配置状态:  ❌ 未配置")
             
             menu_options = {
-                "1": "🚀 开始扫描媒体库",
+                "1": "🚀 开始扫描媒体库（真实扫描）",
                 "2": "⚙️  重新配置服务器",
                 "3": "📊 查看扫描报告", 
                 "4": "🔧 系统信息",
@@ -310,184 +520,4 @@ class EmbyScannerSetup:
                     continue
                 self.run_scanner()
             elif choice == "2":
-                if self.setup_wizard():
-                    self.load_config()
-            elif choice == "3":
-                self.show_reports()
-            elif choice == "4":
-                self.show_system_info()
-            elif choice == "5":
-                self.show_help()
-            elif choice == "0":
-                print("\n👋 感谢使用！")
-                print(f"项目地址: {self.github_url}")
-                break
-            else:
-                print("❌ 无效选择，请重新输入")
-                input("按回车键继续...")
-    
-    def show_system_info(self):
-        """显示系统信息"""
-        self.clear_screen()
-        self.print_banner()
-        
-        print("🔧 系统信息")
-        print("=" * 50)
-        print(f"工具版本: v{self.version}")
-        print(f"Python版本: {sys.version.split()[0]}")
-        print(f"运行目录: {self.script_dir}")
-        
-        if self.server_url:
-            print(f"服务器: {self.server_url}")
-        
-        config_file = os.path.join(self.script_dir, 'emby_config.json')
-        if os.path.exists(config_file):
-            config_time = datetime.fromtimestamp(os.path.getctime(config_file))
-            print(f"配置时间: {config_time.strftime('%Y-%m-%d %H:%M')}")
-        
-        reports = [f for f in os.listdir(self.script_dir) 
-                  if f.startswith("emby_library_report_") and f.endswith(".txt")]
-        print(f"扫描报告: {len(reports)} 个")
-        
-        input("\n按回车键返回主菜单...")
-    
-    def show_reports(self):
-        """显示报告文件"""
-        self.clear_screen()
-        self.print_banner()
-        print("\n📊 扫描报告列表")
-        print("=" * 50)
-        
-        reports = []
-        for file in os.listdir(self.script_dir):
-            if file.startswith("emby_library_report_") and file.endswith(".txt"):
-                file_path = os.path.join(self.script_dir, file)
-                file_time = datetime.fromtimestamp(os.path.getctime(file_path))
-                reports.append((file, file_time))
-        
-        if not reports:
-            print("暂无扫描报告")
-            print("请先运行扫描功能生成报告")
-        else:
-            reports.sort(key=lambda x: x[1], reverse=True)
-            
-            print("最近的报告文件:")
-            for i, (report, report_time) in enumerate(reports[:5], 1):
-                time_str = report_time.strftime("%m-%d %H:%M")
-                print(f"{i}. {report} ({time_str})")
-            
-            choice = input("\n输入编号查看报告，直接回车返回: ").strip()
-            if choice.isdigit() and 1 <= int(choice) <= len(reports):
-                self.view_report(reports[int(choice)-1][0])
-        
-        input("\n按回车键返回主菜单...")
-    
-    def view_report(self, filename):
-        """查看报告内容"""
-        try:
-            with open(os.path.join(self.script_dir, filename), 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            lines = content.split('\n')
-            page_size = 20
-            current_page = 0
-            
-            while current_page * page_size < len(lines):
-                self.clear_screen()
-                print(f"📄 报告: {filename}")
-                print(f"页码: {current_page + 1}/{(len(lines)-1)//page_size + 1}")
-                print("=" * 60)
-                
-                start = current_page * page_size
-                end = min((current_page + 1) * page_size, len(lines))
-                
-                for line in lines[start:end]:
-                    print(line)
-                
-                print("=" * 60)
-                if end < len(lines):
-                    action = input("回车下一页，q退出: ").lower()
-                    if action == 'q':
-                        break
-                    current_page += 1
-                else:
-                    input("已到末尾，回车返回...")
-                    break
-                    
-        except Exception as e:
-            print(f"❌ 读取失败: {e}")
-            input("按回车键继续...")
-    
-    def show_help(self):
-        """显示帮助信息"""
-        self.clear_screen()
-        self.print_banner()
-        print("""
-📖 使用指南
-
-1. 首次使用
-   - 选择「重新配置服务器」完成初始设置
-   - 输入您的Emby服务器地址和API密钥
-   - 工具会自动配置Python环境
-
-2. 服务器配置
-   - 支持本地和远程Emby服务器
-   - 需要正确的服务器地址和API密钥
-   - 配置信息会保存在本地
-
-3. 扫描功能
-   - 智能检测重复的电影和电视剧
-   - 基于TMDB ID和文件大小分析
-   - 自动生成详细扫描报告
-
-4. 获取帮助
-   - 查看GitHub页面获取最新信息
-   - 提交Issue反馈问题
-""")
-        input("\n按回车键返回主菜单...")
-    
-    def run_scanner(self):
-        """运行扫描器"""
-        print("\n🚀 开始扫描媒体库...")
-        print("请等待，这可能需要一些时间...")
-        print("-" * 50)
-        
-        try:
-            import time
-            for i in range(5):
-                print(f"扫描中... [{i+1}/5]")
-                time.sleep(0.5)
-            
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            report_file = f"emby_library_report_{timestamp}.txt"
-            
-            with open(report_file, 'w', encoding='utf-8') as f:
-                f.write("Emby媒体库扫描报告\n")
-                f.write("=" * 50 + "\n")
-                f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"服务器: {self.server_url}\n\n")
-                f.write("扫描功能正在开发中...\n")
-                f.write("完整版本将包含详细的重复检测功能。\n")
-            
-            print("✅ 扫描完成！")
-            print(f"📄 报告已生成: {report_file}")
-                
-        except Exception as e:
-            print(f"❌ 扫描过程出现错误: {e}")
-        
-        input("\n按回车键返回主菜单...")
-
-def main():
-    """主函数"""
-    setup = EmbyScannerSetup()
-    
-    setup.load_config()
-    
-    if not setup.server_url or not setup.api_key:
-        if not setup.setup_wizard():
-            return
-    
-    setup.main_menu()
-
-if __name__ == "__main__":
-    main()
+                if self.setup_wizard
