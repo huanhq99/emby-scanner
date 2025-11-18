@@ -28,7 +28,7 @@ class EmbyScannerSetup:
             # 如果是管道运行，配置和报告将保存在当前执行命令的目录下
             self.script_dir = os.getcwd() 
             
-        self.version = "2.2" # 版本号更新以反映功能变更
+        self.version = "2.3" # 版本号更新以反映功能变更
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         
     def clear_screen(self):
@@ -53,13 +53,43 @@ class EmbyScannerSetup:
             print(f"  {key}. {value}")
         print("-" * 50)
     
+    def _get_interactive_input(self, prompt):
+        """尝试从交互式终端获取输入，处理管道执行后的EOFError。"""
+        
+        # 优先使用标准输入
+        
+        # 仅在非交互模式下（管道执行时）尝试从 /dev/tty 读取
+        if not sys.stdin.isatty():
+            try:
+                # 尝试打开/dev/tty以进行交互式读取
+                # 必须将提示信息输出到stderr，否则可能被pipe捕获
+                with open('/dev/tty', 'r+') as tty:
+                    print(prompt, end='', file=sys.stderr)
+                    return tty.readline().strip()
+            except Exception:
+                # 如果 /dev/tty 失败，则回退到标准输入
+                pass 
+        
+        # 标准输入路径
+        try:
+            return input(prompt).strip()
+        except EOFError:
+            # 捕获 EOFError 并提供有用的信息
+            print("\n❌ 错误: 交互式输入流已关闭 (EOFError)。请确保您在交互式终端中运行。", file=sys.stderr)
+            sys.exit(1)
+        except Exception:
+            raise
+
     def get_user_input(self, prompt, default=""):
         """获取用户输入"""
-        if default:
-            user_input = input(f"{prompt} [{default}]: ").strip()
-            return user_input if user_input else default
-        else:
-            return input(f"{prompt}: ").strip()
+        full_prompt = f"{prompt} [{default}]: " if default else f"{prompt}: "
+        user_input = self._get_interactive_input(full_prompt)
+        
+        return user_input if user_input else default
+
+    def _prompt_continue(self, prompt="按回车键继续..."):
+        """简单的按键继续提示"""
+        self._get_interactive_input(f"\n{prompt}")
     
     def check_python(self):
         """检查Python环境"""
@@ -170,7 +200,8 @@ class EmbyScannerSetup:
                 continue
                 
             if len(self.api_key) < 10:
-                confirm = input("⚠️  API密钥似乎过短，是否继续？(y/n): ").lower()
+                # 使用 _get_interactive_input 获取确认
+                confirm = self._get_interactive_input("⚠️  API密钥似乎过短，是否继续？(y/n): ").lower()
                 if confirm != 'y':
                     continue
             
@@ -182,7 +213,8 @@ class EmbyScannerSetup:
             return True
         else:
             print("❌ 连接测试失败")
-            retry = input("\n是否重新配置？(y/n): ").lower()
+            # 使用 _get_interactive_input 获取重试选项
+            retry = self._get_interactive_input("\n是否重新配置？(y/n): ").lower()
             if retry == 'y':
                 return self.get_emby_config()
             return False
@@ -593,7 +625,7 @@ class EmbyScannerSetup:
         else:
             print("❌ 扫描失败")
         
-        input("\n按回车键返回主菜单...")
+        self._prompt_continue("按回车键返回主菜单...")
     
     def show_reports(self):
         """显示报告文件"""
@@ -623,11 +655,11 @@ class EmbyScannerSetup:
                 print(f"{i}. {report}")
                 print(f"   时间: {time_str} | 大小: {size_kb:.1f}KB")
             
-            choice = input("\n输入报告编号查看，或按回车返回: ").strip()
+            choice = self.get_user_input("\n输入报告编号查看，或按回车返回: ").strip()
             if choice.isdigit() and 1 <= int(choice) <= len(reports):
                 self.view_report(reports[int(choice)-1][0])
         
-        input("\n按回车键返回主菜单...")
+        self._prompt_continue("按回车键返回主菜单...")
     
     def view_report(self, filename):
         """查看报告内容"""
@@ -655,7 +687,7 @@ class EmbyScannerSetup:
                 
                 print("=" * 70)
                 if end < len(lines):
-                    action = input("回车下一页，q退出，f查看文件路径: ").lower()
+                    action = self._get_interactive_input("回车下一页，q退出，f查看文件路径: ").lower()
                     if action == 'q':
                         break
                     elif action == 'f':
@@ -663,17 +695,17 @@ class EmbyScannerSetup:
                         print("💡 你可以用以下命令查看:")
                         print(f"   cat '{file_path}'")
                         print(f"   nano '{file_path}'")
-                        input("\n按回车继续...")
+                        self._prompt_continue("按回车继续...")
                     else:
                         current_page += 1
                 else:
                     print(f"\n📁 报告文件完整路径: {file_path}")
-                    input("已到报告末尾，按回车返回...")
+                    self._prompt_continue("已到报告末尾，按回车返回...")
                     break
                     
         except Exception as e:
             print(f"❌ 读取报告失败: {e}")
-            input("按回车键继续...")
+            self._prompt_continue("按回车键继续...")
     
     def show_system_info(self):
         """显示系统信息"""
@@ -700,7 +732,7 @@ class EmbyScannerSetup:
             print(f"最新报告: {latest}")
             print(f"生成时间: {latest_time.strftime('%Y-%m-%d %H:%M')}")
         
-        input("\n按回车键返回主菜单...")
+        self._prompt_continue("按回车键返回主菜单...")
     
     def show_help(self):
         """显示帮助信息"""
@@ -730,7 +762,7 @@ class EmbyScannerSetup:
 - 报告会显示完整文件路径和文件体积
 - 支持查看历史扫描记录
 """)
-        input("\n按回车键返回主菜单...")
+        self._prompt_continue("按回车键返回主菜单...")
     
     def setup_wizard(self):
         """设置向导"""
@@ -742,19 +774,19 @@ class EmbyScannerSetup:
         print("=" * 50)
         
         if not self.check_python():
-            input("\n按回车键退出...")
+            self._prompt_continue("按回车键退出...")
             return False
         
         if not self.setup_virtualenv():
-            input("\n按回车键退出...")
+            self._prompt_continue("按回车键退出...")
             return False
         
         if not self.install_dependencies():
-            input("\n按回车键退出...")
+            self._prompt_continue("按回车键退出...")
             return False
         
         if not self.get_emby_config():
-            input("\n按回车键退出...")
+            self._prompt_continue("按回车键退出...")
             return False
         
         if self.save_config():
@@ -764,7 +796,7 @@ class EmbyScannerSetup:
         
         print("\n🎉 初始设置完成！")
         print("您现在可以使用完整的重复检测功能了。")
-        input("\n按回车键进入主菜单...")
+        self._prompt_continue("按回车键进入主菜单...")
         return True
     
     def main_menu(self):
@@ -793,12 +825,13 @@ class EmbyScannerSetup:
             
             self.print_menu("主菜单", menu_options)
             
-            choice = input("请输入选项 [0-5]: ").strip()
+            # 使用更健壮的输入方法
+            choice = self.get_user_input("请输入选项 [0-5]: ").strip()
             
             if choice == "1":
                 if not self.server_url or not self.api_key:
                     print("❌ 请先配置服务器信息")
-                    input("按回车键继续...")
+                    self._prompt_continue()
                     continue
                 self.run_scanner()
             elif choice == "2":
@@ -816,7 +849,7 @@ class EmbyScannerSetup:
                 break
             else:
                 print("❌ 无效选择，请重新输入")
-                input("按回车键继续...")
+                self._prompt_continue()
 
 def main():
     """主函数"""
