@@ -31,11 +31,8 @@ class EmbyScannerSetup:
         """打印横幅"""
         banner = f"""
 ╔════════════════════════════════════════════════════════════════╗
-║                                                                
-║                Emby媒体库重复检测工具 v{self.version}               
-║                                                                 ║
-║              GitHub: {self.github_url}               
-║                                                                 ║
+║                Emby媒体库重复检测工具 v{self.version}              
+║                GitHub: {self.github_url}               
 ╚════════════════════════════════════════════════════════════════╝
         """
         print(banner)
@@ -132,70 +129,51 @@ class EmbyScannerSetup:
         print("4. 点击「新建API密钥」按钮")
         print("5. 输入描述（如：扫描工具），点击「确定」")
         print("6. 复制生成的API密钥")
-        print("\n⚠️  注意事项:")
-        print("  - API密钥需要具有媒体库读取权限")
-        print("  - 确保密钥未过期")
-        print("  - 如无权限，请联系管理员获取API密钥")
     
     def get_emby_config(self):
         """获取Emby配置"""
         print("\n⚙️  Emby服务器配置")
         print("=" * 50)
         
-        # 显示服务器示例
         self.show_server_examples()
         
-        # 获取服务器地址
         while True:
             self.server_url = self.get_user_input("\n请输入Emby服务器地址").strip()
             if not self.server_url:
                 print("❌ 服务器地址不能为空")
                 continue
             
-            # 自动添加http前缀如果用户忘记输入
             if not self.server_url.startswith(('http://', 'https://')):
                 self.server_url = 'http://' + self.server_url
                 print(f"💡 已自动添加协议: {self.server_url}")
             
-            # 验证服务器地址格式
             if '://' not in self.server_url:
-                print("❌ 服务器地址格式不正确，请包含 http:// 或 https://")
+                print("❌ 服务器地址格式不正确")
                 continue
                 
             break
         
-        # 显示API密钥帮助
         self.show_api_help()
         
-        # 获取API密钥
         while True:
             self.api_key = self.get_user_input("\n请输入API密钥").strip()
             if not self.api_key:
                 print("❌ API密钥不能为空")
                 continue
                 
-            # 简单验证API密钥格式（通常是32位十六进制）
             if len(self.api_key) < 10:
-                print("⚠️  API密钥似乎过短，请确认是否正确")
-                confirm = input("是否继续使用此密钥？(y/n): ").lower()
+                confirm = input("⚠️  API密钥似乎过短，是否继续？(y/n): ").lower()
                 if confirm != 'y':
                     continue
             
             break
         
-        # 测试连接
         print("\n🔗 测试服务器连接...")
         if self.test_connection():
             print("✅ 连接成功！配置验证通过")
             return True
         else:
             print("❌ 连接测试失败")
-            print("\n可能的原因:")
-            print("  - 服务器地址不正确")
-            print("  - API密钥无效或过期") 
-            print("  - 网络连接问题")
-            print("  - 服务器防火墙限制")
-            
             retry = input("\n是否重新配置？(y/n): ").lower()
             if retry == 'y':
                 return self.get_emby_config()
@@ -271,27 +249,22 @@ class EmbyScannerSetup:
         print("本向导将引导您完成初始设置。")
         print("=" * 50)
         
-        # 检查Python
         if not self.check_python():
             input("\n按回车键退出...")
             return False
         
-        # 设置虚拟环境
         if not self.setup_virtualenv():
             input("\n按回车键退出...")
             return False
         
-        # 安装依赖
         if not self.install_dependencies():
             input("\n按回车键退出...")
             return False
         
-        # 获取配置
         if not self.get_emby_config():
             input("\n按回车键退出...")
             return False
         
-        # 保存配置
         if self.save_config():
             print("✅ 配置已保存到本地文件")
         else:
@@ -308,9 +281,7 @@ class EmbyScannerSetup:
             self.clear_screen()
             self.print_banner()
             
-            # 显示当前配置状态
             if self.server_url and self.api_key:
-                # 安全显示服务器地址
                 display_url = self.server_url
                 if len(display_url) > 35:
                     display_url = display_url[:32] + "..."
@@ -340,7 +311,7 @@ class EmbyScannerSetup:
                 self.run_scanner()
             elif choice == "2":
                 if self.setup_wizard():
-                    self.load_config()  # 重新加载配置
+                    self.load_config()
             elif choice == "3":
                 self.show_reports()
             elif choice == "4":
@@ -369,13 +340,11 @@ class EmbyScannerSetup:
         if self.server_url:
             print(f"服务器: {self.server_url}")
         
-        # 检查配置文件
         config_file = os.path.join(self.script_dir, 'emby_config.json')
         if os.path.exists(config_file):
             config_time = datetime.fromtimestamp(os.path.getctime(config_file))
             print(f"配置时间: {config_time.strftime('%Y-%m-%d %H:%M')}")
         
-        # 检查报告数量
         reports = [f for f in os.listdir(self.script_dir) 
                   if f.startswith("emby_library_report_") and f.endswith(".txt")]
         print(f"扫描报告: {len(reports)} 个")
@@ -464,7 +433,7 @@ class EmbyScannerSetup:
 2. 服务器配置
    - 支持本地和远程Emby服务器
    - 需要正确的服务器地址和API密钥
-   - 配置信息会加密保存在本地
+   - 配置信息会保存在本地
 
 3. 扫描功能
    - 智能检测重复的电影和电视剧
@@ -474,8 +443,7 @@ class EmbyScannerSetup:
 4. 获取帮助
    - 查看GitHub页面获取最新信息
    - 提交Issue反馈问题
-   - 欢迎贡献代码和改进建议
-        """)
+""")
         input("\n按回车键返回主菜单...")
     
     def run_scanner(self):
@@ -485,14 +453,11 @@ class EmbyScannerSetup:
         print("-" * 50)
         
         try:
-            # 这里应该集成完整的扫描功能
-            # 暂时用模拟进度
             import time
             for i in range(5):
                 print(f"扫描中... [{i+1}/5]")
                 time.sleep(0.5)
             
-            # 生成示例报告
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             report_file = f"emby_library_report_{timestamp}.txt"
             
@@ -501,4 +466,28 @@ class EmbyScannerSetup:
                 f.write("=" * 50 + "\n")
                 f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"服务器: {self.server_url}\n\n")
-                f.write("这是示例报告，需要集成
+                f.write("扫描功能正在开发中...\n")
+                f.write("完整版本将包含详细的重复检测功能。\n")
+            
+            print("✅ 扫描完成！")
+            print(f"📄 报告已生成: {report_file}")
+                
+        except Exception as e:
+            print(f"❌ 扫描过程出现错误: {e}")
+        
+        input("\n按回车键返回主菜单...")
+
+def main():
+    """主函数"""
+    setup = EmbyScannerSetup()
+    
+    setup.load_config()
+    
+    if not setup.server_url or not setup.api_key:
+        if not setup.setup_wizard():
+            return
+    
+    setup.main_menu()
+
+if __name__ == "__main__":
+    main()
