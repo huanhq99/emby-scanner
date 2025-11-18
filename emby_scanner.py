@@ -23,15 +23,27 @@ class EmbyScannerSetup:
         
         # 优先级 1: 脚本自身的绝对路径 (本地直接执行)
         try:
-            self.script_dir = os.path.dirname(os.path.abspath(__file__))
-        except NameError:
-            # 优先级 2 (单行命令执行): 强制使用用户家目录的绝对路径，这在VPS上通常是 /root
-            self.script_dir = os.path.expanduser('~')
+            temp_script_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # 关键修复 (v2.8): 如果路径包含 /fd/ 或 /proc/self/fd/，说明是通过管道/进程替换运行，不能用这个路径。
+            if '/fd/' in temp_script_dir or '/proc/self/fd/' in temp_script_dir:
+                raise ValueError("Running via pipe/process substitution detected.")
+                
+            self.script_dir = temp_script_dir
+            
+        except (NameError, ValueError):
+            # 优先级 2 (单行命令执行): 强制使用用户家目录的绝对路径
+            # 使用 os.environ.get('HOME') 是最安全的获取 home 目录的方法
+            home_dir = os.environ.get('HOME')
+            if home_dir:
+                self.script_dir = home_dir
+            else:
+                self.script_dir = os.path.expanduser('~')
         
-        # 统一使用一个专用的子目录来存储配置和报告，避免 /dev/fd 路径问题
+        # 统一使用一个专用的子目录来存储配置和报告，确保可写权限
         self.data_dir = os.path.join(self.script_dir, "emby_scanner_data")
             
-        self.version = "2.7" # 版本号更新，修复配置存储路径问题
+        self.version = "2.8" # 版本号更新，修复 /dev/fd 路径问题
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         
     def clear_screen(self):
