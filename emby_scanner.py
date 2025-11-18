@@ -28,7 +28,7 @@ class EmbyScannerSetup:
             # 如果是管道运行，配置和报告将保存在当前执行命令的目录下
             self.script_dir = os.getcwd() 
             
-        self.version = "2.4" # 版本号更新以反映功能变更和交互性改进
+        self.version = "2.5" # 版本号更新，简化输入逻辑
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         
     def clear_screen(self):
@@ -53,47 +53,21 @@ class EmbyScannerSetup:
             print(f"  {key}. {value}")
         print("-" * 50)
     
-    def _get_interactive_input(self, prompt):
-        """尝试从交互式终端获取输入，处理管道执行后的EOFError。"""
-        
-        # 优先使用标准输入（适用于本地直接执行）
-        
-        # 仅在非交互模式下（管道执行时）尝试从 /dev/tty 读取
-        if not sys.stdin.isatty():
-            try:
-                # 尝试打开/dev/tty以进行交互式读取
-                with open('/dev/tty', 'r+') as tty:
-                    # 确保提示信息输出到stderr并刷新，防止被管道捕获
-                    sys.stderr.write(prompt)
-                    sys.stderr.flush()
-                    return tty.readline().strip()
-            except Exception as e:
-                # 如果 /dev/tty 失败（例如没有权限），则回退到标准输入
-                # 打印到 stderr 以避免干扰管道
-                sys.stderr.write(f"\n⚠️ 无法从 /dev/tty 读取 ({e})，尝试标准输入...\n")
-                sys.stderr.flush()
-                pass 
-        
-        # 标准输入路径
+    def get_user_input(self, prompt, default=""):
+        """获取用户输入 (简化版，依赖 Shell 传入 TTY)"""
+        full_prompt = f"{prompt} [{default}]: " if default else f"{prompt}: "
         try:
-            return input(prompt).strip()
+            user_input = input(full_prompt).strip()
+            return user_input if user_input else default
         except EOFError:
-            # 捕获 EOFError 并提供有用的信息
-            print("\n❌ 错误: 交互式输入流已关闭 (EOFError)。请确保您在交互式终端中运行。", file=sys.stderr)
+            print("\n❌ 错误: 交互式输入流已关闭 (EOFError)。请使用完整命令确保输入来自终端。", file=sys.stderr)
             sys.exit(1)
         except Exception:
             raise
 
-    def get_user_input(self, prompt, default=""):
-        """获取用户输入"""
-        full_prompt = f"{prompt} [{default}]: " if default else f"{prompt}: "
-        user_input = self._get_interactive_input(full_prompt)
-        
-        return user_input if user_input else default
-
     def _prompt_continue(self, prompt="按回车键继续..."):
         """简单的按键继续提示"""
-        self._get_interactive_input(f"\n{prompt}")
+        self.get_user_input(f"\n{prompt}")
     
     def check_python(self):
         """检查Python环境"""
@@ -204,8 +178,8 @@ class EmbyScannerSetup:
                 continue
                 
             if len(self.api_key) < 10:
-                # 使用 _get_interactive_input 获取确认
-                confirm = self._get_interactive_input("⚠️  API密钥似乎过短，是否继续？(y/n): ").lower()
+                # 使用 input 获取确认
+                confirm = self.get_user_input("⚠️  API密钥似乎过短，是否继续？(y/n)").lower()
                 if confirm != 'y':
                     continue
             
@@ -217,8 +191,8 @@ class EmbyScannerSetup:
             return True
         else:
             print("❌ 连接测试失败")
-            # 使用 _get_interactive_input 获取重试选项
-            retry = self._get_interactive_input("\n是否重新配置？(y/n): ").lower()
+            # 使用 input 获取重试选项
+            retry = self.get_user_input("\n是否重新配置？(y/n)").lower()
             if retry == 'y':
                 return self.get_emby_config()
             return False
@@ -610,275 +584,12 @@ class EmbyScannerSetup:
         
         try:
             with open(report_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(report_lines))
-            
-            return report_path
-        except Exception as e:
-            print(f"❌ 生成报告失败: {e}")
-            return None
+                f.write('\n这一步很关键，我把脚本的复杂输入逻辑去掉了。
+                现在需要你在命令行中执行一个更精确的命令，才能确保Python执行的是脚本内容，而不是进入交互模式。
 
-    def run_scanner(self):
-        """运行扫描器"""
-        print("\n🚀 开始深度扫描媒体库...")
-        print("正在分析重复内容，请耐心等待...")
-        
-        # 运行真正的重复检测功能
-        report_path = self.run_real_scanner()
-        
-        if report_path:
-            print(f"\n✅ 扫描完成！")
-            print(f"📄 报告文件: {os.path.basename(report_path)}")
-            print(f"📍 文件位置: {self.script_dir}/")
-            print("\n💡 查看报告方法:")
-            print("1. 主菜单 → 查看扫描报告")
-            print(f"2. 命令: cat '{report_path}'")
-            print(f"3. 命令: nano '{report_path}'")
-        else:
-            print("❌ 扫描失败")
-        
-        self._prompt_continue("按回车键返回主菜单...")
-    
-    def show_reports(self):
-        """显示报告文件"""
-        self.clear_screen()
-        self.print_banner()
-        print("\n📊 扫描报告列表")
-        print("=" * 50)
-        
-        reports = []
-        for file in os.listdir(self.script_dir):
-            if file.startswith("emby_library_report_") and file.endswith(".txt"):
-                file_path = os.path.join(self.script_dir, file)
-                file_time = datetime.fromtimestamp(os.path.getctime(file_path))
-                file_size = os.path.getsize(file_path)
-                reports.append((file, file_time, file_size))
-        
-        if not reports:
-            print("暂无扫描报告")
-            print("请先运行扫描功能生成报告")
-        else:
-            reports.sort(key=lambda x: x[1], reverse=True)
-            
-            print(f"找到 {len(reports)} 个报告文件:")
-            for i, (report, report_time, size) in enumerate(reports[:10], 1):
-                time_str = report_time.strftime("%Y-%m-%d %H:%M")
-                size_kb = size / 1024
-                print(f"{i}. {report}")
-                print(f"   时间: {time_str} | 大小: {size_kb:.1f}KB")
-            
-            choice = self.get_user_input("\n输入报告编号查看，或按回车返回: ").strip()
-            if choice.isdigit() and 1 <= int(choice) <= len(reports):
-                self.view_report(reports[int(choice)-1][0])
-        
-        self._prompt_continue("按回车键返回主菜单...")
-    
-    def view_report(self, filename):
-        """查看报告内容"""
-        file_path = os.path.join(self.script_dir, filename)
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            lines = content.split('\n')
-            page_size = 20
-            current_page = 0
-            
-            while current_page * page_size < len(lines):
-                self.clear_screen()
-                print(f"📄 报告文件: {filename}")
-                print(f"📍 文件路径: {file_path}")
-                print(f"📄 页码: {current_page + 1}/{(len(lines)-1)//page_size + 1}")
-                print("=" * 70)
-                
-                start = current_page * page_size
-                end = min((current_page + 1) * page_size, len(lines))
-                
-                for i, line in enumerate(lines[start:end], start + 1):
-                    print(f"{line}")
-                
-                print("=" * 70)
-                if end < len(lines):
-                    action = self._get_interactive_input("回车下一页，q退出，f查看文件路径: ").lower()
-                    if action == 'q':
-                        break
-                    elif action == 'f':
-                        print(f"\n📁 报告文件完整路径: {file_path}")
-                        print("💡 你可以用以下命令查看:")
-                        print(f"   cat '{file_path}'")
-                        print(f"   nano '{file_path}'")
-                        self._prompt_continue("按回车继续...")
-                    else:
-                        current_page += 1
-                else:
-                    print(f"\n📁 报告文件完整路径: {file_path}")
-                    self._prompt_continue("已到报告末尾，按回车返回...")
-                    break
-                    
-        except Exception as e:
-            print(f"❌ 读取报告失败: {e}")
-            self._prompt_continue("按回车键继续...")
-    
-    def show_system_info(self):
-        """显示系统信息"""
-        self.clear_screen()
-        self.print_banner()
-        
-        print("🔧 系统信息")
-        print("=" * 50)
-        print(f"工具版本: v{self.version}")
-        print(f"Python版本: {sys.version.split()[0]}")
-        print(f"当前目录: {self.script_dir}")
-        
-        if self.server_url:
-            print(f"服务器: {self.server_url}")
-        
-        # 检查报告文件
-        reports = [f for f in os.listdir(self.script_dir) 
-                  if f.startswith("emby_library_report_") and f.endswith(".txt")]
-        print(f"报告文件: {len(reports)} 个")
-        
-        if reports:
-            latest = max(reports, key=lambda f: os.path.getctime(os.path.join(self.script_dir, f)))
-            latest_time = datetime.fromtimestamp(os.path.getctime(os.path.join(self.script_dir, latest)))
-            print(f"最新报告: {latest}")
-            print(f"生成时间: {latest_time.strftime('%Y-%m-%d %H:%M')}")
-        
-        self._prompt_continue("按回车键返回主菜单...")
-    
-    def show_help(self):
-        """显示帮助信息"""
-        self.clear_screen()
-        self.print_banner()
-        print("""
-📖 使用指南
+### 正确的单行运行命令
 
-🎯 主要功能:
--  🔴 TMDB ID重复检测（最准确）
--  🟡 文件体积重复检测（辅助查重）
--  📊 详细扫描报告生成，包含文件体积和路径
--  📁 文件路径清晰显示
+请使用以下命令，它通过 `/dev/stdin` **告诉 Python 脚本内容在哪里**，并用 `< /dev/tty` **将终端输入重定向给脚本**：
 
-🔍 检测规则:
-1. TMDB ID相同 → 确定重复
-2. 文件体积完全相同（且没有TMDB ID）→ 可疑重复
-3. 自动区分电影和电视剧
-
-📁 文件位置说明:
-- 配置文件: 当前目录/emby_config.json
-- 扫描报告: 当前目录/emby_library_report_时间戳.txt
-
-💡 使用技巧:
-- 首次使用需要配置服务器
-- 大型媒体库扫描需要时间
-- 报告会显示完整文件路径和文件体积
-- 支持查看历史扫描记录
-""")
-        self._prompt_continue("按回车键返回主菜单...")
-    
-    def setup_wizard(self):
-        """设置向导"""
-        self.clear_screen()
-        self.print_banner()
-        
-        print("欢迎使用Emby媒体库重复检测工具！")
-        print("本向导将引导您完成初始设置。")
-        print("=" * 50)
-        
-        if not self.check_python():
-            self._prompt_continue("按回车键退出...")
-            return False
-        
-        if not self.setup_virtualenv():
-            self._prompt_continue("按回车键退出...")
-            return False
-        
-        if not self.install_dependencies():
-            self._prompt_continue("按回车键退出...")
-            return False
-        
-        if not self.get_emby_config():
-            self._prompt_continue("按回车键退出...")
-            return False
-        
-        if self.save_config():
-            print("✅ 配置已保存到本地文件")
-        else:
-            print("⚠️  配置保存失败，下次需要重新输入")
-        
-        print("\n🎉 初始设置完成！")
-        print("您现在可以使用完整的重复检测功能了。")
-        self._prompt_continue("按回车键进入主菜单...")
-        return True
-    
-    def main_menu(self):
-        """主菜单"""
-        while True:
-            self.clear_screen()
-            self.print_banner()
-            
-            if self.server_url and self.api_key:
-                display_url = self.server_url
-                if len(display_url) > 35:
-                    display_url = display_url[:32] + "..."
-                print(f"当前服务器: {display_url}")
-                print("配置状态: ✅ 已配置")
-            else:
-                print("配置状态: ❌ 未配置")
-            
-            menu_options = {
-                "1": "🚀 开始深度扫描（检测重复）",
-                "2": "⚙️  重新配置服务器",
-                "3": "📊 查看扫描报告", 
-                "4": "🔧 系统信息",
-                "5": "📖 使用指南",
-                "0": "🚪 退出程序"
-            }
-            
-            self.print_menu("主菜单", menu_options)
-            
-            # 使用更健壮的输入方法
-            choice = self.get_user_input("请输入选项 [0-5]: ").strip()
-            
-            # 新增反馈：确认收到用户的输入
-            print(f"-> 收到选项: {choice}")
-            
-            if choice == "1":
-                if not self.server_url or not self.api_key:
-                    print("❌ 请先配置服务器信息")
-                    self._prompt_continue()
-                    continue
-                self.run_scanner()
-            elif choice == "2":
-                if self.setup_wizard():
-                    self.load_config()
-            elif choice == "3":
-                self.show_reports()
-            elif choice == "4":
-                self.show_system_info()
-            elif choice == "5":
-                self.show_help()
-            elif choice == "0":
-                print("\n👋 感谢使用！")
-                print(f"项目地址: {self.github_url}")
-                break
-            else:
-                print("❌ 无效选择，请重新输入")
-                self._prompt_continue()
-
-def main():
-    """主函数"""
-    setup = EmbyScannerSetup()
-    
-    # 尝试加载现有配置
-    setup.load_config()
-    
-    # 如果未配置，运行设置向导
-    if not setup.server_url or not setup.api_key:
-        if not setup.setup_wizard():
-            return
-    
-    # 显示主菜单
-    setup.main_menu()
-
-if __name__ == "__main__":
-    main()
+```bash
+curl -sL [https://raw.githubusercontent.com/huanhq99/emby-scanner/main/emby_scanner.py](https://raw.githubusercontent.com/huanhq99/emby-scanner/main/emby_scanner.py) | python3 -u /dev/stdin < /dev/tty
