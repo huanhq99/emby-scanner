@@ -21,29 +21,32 @@ class EmbyScannerSetup:
         self.api_key = ""
         self.venv_path = os.path.expanduser("~/emby-scanner-env")
         
-        # 优先级 1: 脚本自身的绝对路径 (本地直接执行)
+        # 步骤 1: 确定 HOME 目录作为最安全的默认路径
+        home_dir = os.environ.get('HOME')
+        if home_dir:
+            default_script_dir = home_dir
+        else:
+            default_script_dir = os.path.expanduser('~')
+        
+        self.script_dir = default_script_dir # 默认设置为家目录
+        
+        # 步骤 2: 尝试获取脚本自身的路径，并严格检查是否是临时路径
         try:
             temp_script_dir = os.path.dirname(os.path.abspath(__file__))
             
-            # 关键修复 (v2.8): 如果路径包含 /fd/ 或 /proc/self/fd/，说明是通过管道/进程替换运行，不能用这个路径。
-            if '/fd/' in temp_script_dir or '/proc/self/fd/' in temp_script_dir:
-                raise ValueError("Running via pipe/process substitution detected.")
+            # 只有在路径看起来"干净"时，才使用它。
+            # 检查：如果路径包含 /fd/ 或 /proc/self/fd/，说明是通过管道运行，忽略它，使用默认的 HOME 路径。
+            if '/fd/' not in temp_script_dir and '/proc/self/fd/' not in temp_script_dir:
+                self.script_dir = temp_script_dir
                 
-            self.script_dir = temp_script_dir
-            
         except (NameError, ValueError):
-            # 优先级 2 (单行命令执行): 强制使用用户家目录的绝对路径
-            # 使用 os.environ.get('HOME') 是最安全的获取 home 目录的方法
-            home_dir = os.environ.get('HOME')
-            if home_dir:
-                self.script_dir = home_dir
-            else:
-                self.script_dir = os.path.expanduser('~')
-        
-        # 统一使用一个专用的子目录来存储配置和报告，确保可写权限
+            # 如果 __file__ 未定义，则保持使用默认的 HOME 路径。
+            pass
+            
+        # 步骤 3: 统一使用一个专用的子目录来存储配置和报告，确保可写权限
         self.data_dir = os.path.join(self.script_dir, "emby_scanner_data")
             
-        self.version = "2.8" # 版本号更新，修复 /dev/fd 路径问题
+        self.version = "2.9" # 版本号更新，最终路径修复
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         
     def clear_screen(self):
@@ -69,16 +72,11 @@ class EmbyScannerSetup:
         print("-" * 50)
     
     def get_user_input(self, prompt, default=""):
-        """获取用户输入 (简化版，依赖 Shell 传入 TTY)"""
+        """获取用户输入 (使用标准 input，依赖 Shell 传入 TTY)"""
         full_prompt = f"{prompt} [{default}]: " if default else f"{prompt}: "
         try:
-            # 增加 sys.stdout.flush() 确保提示立即显示，防止输入卡顿
-            sys.stdout.write(full_prompt)
-            sys.stdout.flush()
-            
-            # 使用 sys.stdin.readline() 依赖 shell 解决输入问题
-            user_input = sys.stdin.readline().strip()
-            
+            # 依赖 python3 -u <(...) 确保交互正常
+            user_input = input(full_prompt).strip()
             return user_input if user_input else default
         except EOFError:
             print("\n❌ 错误: 交互式输入流已关闭 (EOFError)。请使用完整命令确保输入来自终端。", file=sys.stderr)
@@ -88,10 +86,12 @@ class EmbyScannerSetup:
 
     def _prompt_continue(self, prompt="按回车键继续..."):
         """简单的按键继续提示"""
-        # 使用 sys.stdin.readline() 依赖 shell 解决输入问题
-        sys.stdout.write(f"\n{prompt}")
-        sys.stdout.flush()
-        sys.stdin.readline()
+        # 依赖 python3 -u <(...) 确保交互正常
+        try:
+            input(f"\n{prompt}")
+        except EOFError:
+            # 在 EOF 时退出，防止程序挂起
+            sys.exit(1)
     
     def check_python(self):
         """检查Python环境"""
@@ -886,10 +886,11 @@ def main():
     # 在进行任何文件操作之前，创建数据目录
     if not os.path.exists(setup.data_dir):
         try:
+            # 尝试创建目录，如果失败则打印错误
             os.makedirs(setup.data_dir, exist_ok=True)
             print(f"✅ 创建数据存储目录: {setup.data_dir}")
         except Exception as e:
-            print(f"❌ 无法创建数据存储目录: {setup.data_dir}。请检查权限。错误: {e}")
+            print(f"❌ 无法创建数据存储目录: {setup.data_dir}。请检查权限或路径设置。错误: {e}")
             return
             
     # 尝试加载现有配置
