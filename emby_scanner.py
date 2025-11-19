@@ -45,7 +45,7 @@ class EmbyScannerPro:
     def clear_screen(self):
         os.system('cls' if os.name == 'nt' else 'clear')
 
-def print_banner(self):
+    def print_banner(self):
         """
         高度还原 HQ 头像的 ASCII Art (v3.3 Final Design - 强调风格和识别度)
         """
@@ -67,6 +67,7 @@ def print_banner(self):
 {Colors.WHITE}╚══════════════════════════════╝{Colors.RESET}
 """
         print(logo)
+
     # --- 输入处理 ---
     def get_user_input(self, prompt, default=""):
         full_prompt = f"{Colors.BOLD}{prompt}{Colors.RESET} [{default}]: " if default else f"{Colors.BOLD}{prompt}{Colors.RESET}: "
