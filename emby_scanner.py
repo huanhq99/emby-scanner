@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v3.5 HQ_Edition (Final Logo Fixed)
+Emby媒体库重复检测工具 v3.6 Size-Only Edition
 GitHub: https://github.com/huanhq99/emby-scanner
+核心升级: 
+1. 逻辑重构：纯体积(Size)去重，忽略 TMDB ID，专治"同大异名"
+2. UI：集成 HQ 像素风 ASCII Banner
+3. 架构：Zero-Dependency (原生 urllib)
 """
 
 import os
@@ -30,39 +34,42 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "3.5 HQ"
+        self.version = "3.6 HQ"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
         self.headers = {}
+
+        # --- 核心路径修复逻辑 ---
+        # 强制依赖 $HOME 环境变量，这是远程环境中唯一可靠的起点
         home_dir = os.environ.get('HOME')
         self.script_dir = home_dir if home_dir else os.path.expanduser('~')
         self.data_dir = os.path.join(self.script_dir, "emby_scanner_data")
 
+    # --- 系统工具 ---
     def clear_screen(self):
         os.system('cls' if os.name == 'nt' else 'clear')
 
     def print_banner(self):
-        """HQ 头像 ASCII Art"""
+        """
+        HQ 像素风 ASCII Art (v3.6)
+        """
         logo = f"""
-{Colors.RED}        ╔═══════════════════════╗{Colors.RESET}
-{Colors.RED}      ╔═╝{Colors.WHITE}░░{Colors.RED}╚═══════════════╝{Colors.WHITE}░░{Colors.RED}╚═╗{Colors.RESET}
-{Colors.RED}     ║{Colors.WHITE}░░░{Colors.RED}║{Colors.WHITE}                 {Colors.RED}║{Colors.WHITE}░░░{Colors.RED}║{Colors.RESET}
-{Colors.RED}    ║{Colors.WHITE}░░{Colors.RED}║  ║{Colors.BOLD}{Colors.WHITE}██  ██  ███{Colors.RESET}{Colors.RED}║  ║{Colors.WHITE}░░{Colors.RED}║{Colors.YELLOW}═══╗{Colors.RESET}
-{Colors.RED}   ║{Colors.WHITE}░{Colors.RED}║   ║{Colors.BOLD}{Colors.WHITE}██  ██ ██ ██{Colors.RESET}{Colors.RED}║   ║{Colors.WHITE}░{Colors.RED}║{Colors.YELLOW}═══║{Colors.RESET}   {Colors.YELLOW}Emby Duplicate Scanner{Colors.RESET}
-{Colors.RED}  ║{Colors.WHITE}░{Colors.RED}║    ║{Colors.BOLD}{Colors.WHITE}████████ ███{Colors.RESET}{Colors.RED}║    ║{Colors.WHITE}░{Colors.RED}║{Colors.YELLOW}═══║{Colors.RESET}   {Colors.CYAN}v{self.version}{Colors.RESET}
-{Colors.RED} ║{Colors.WHITE}░{Colors.RED}║     ╚═══════════════╝     ║{Colors.WHITE}░{Colors.RED}║{Colors.YELLOW}═══║{Colors.RESET}
-{Colors.RED}║{Colors.WHITE}░{Colors.RED}║       {Colors.YELLOW}▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓{Colors.RESET}       {Colors.RED}║{Colors.WHITE}░{Colors.RED}║{Colors.YELLOW}══╝{Colors.RESET}
-{Colors.RED}║{Colors.WHITE}░{Colors.RED}╚════════════════════════════╝{Colors.WHITE}░{Colors.RED}║{Colors.RESET}   {Colors.MAGENTA}[ Mode: Size-Only ]{Colors.RESET}
-{Colors.WHITE}╠════════════════════════════════╣{Colors.RESET}
-{Colors.WHITE}║       ●●●          ●●●       ║{Colors.RESET}
-{Colors.WHITE}║                              ║{Colors.RESET}
-{Colors.WHITE}║            ▂▂▂▂▂             ║{Colors.RESET}
-{Colors.WHITE}║          ▐       ▌           ║{Colors.RESET}
-{Colors.WHITE}╚══════════════════════════════╝{Colors.RESET}
+{Colors.RED}       ██████████████████████████{Colors.RESET}
+{Colors.RED}     ██{Colors.WHITE}█{Colors.RED}             {Colors.WHITE}█{Colors.RED}██{Colors.RESET}
+{Colors.RED}    ██ {Colors.WHITE}██████{Colors.RED}█ {Colors.WHITE}█{Colors.RED}██{Colors.WHITE} █{Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}
+{Colors.RED}   █  {Colors.WHITE}█{Colors.RED}██{Colors.WHITE}██{Colors.RED}█ {Colors.WHITE}█{Colors.RED}██{Colors.WHITE} █{Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}    {Colors.YELLOW}Emby Duplicate Scanner{Colors.RESET}
+{Colors.RED}  █   {Colors.WHITE}█{Colors.RED}██{Colors.WHITE}██{Colors.RED}█ {Colors.WHITE}█{Colors.RED}██{Colors.WHITE} █{Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}    {Colors.CYAN}v{self.version}{Colors.RESET}
+{Colors.RED} █    {Colors.WHITE}▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ {Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}
+{Colors.RED}██     {Colors.YELLOW}███████████████████{Colors.RED}██{Colors.RESET}   {Colors.MAGENTA}[ Mode: Size-Only ]{Colors.RESET}
+{Colors.WHITE}██       {Colors.RED}█{Colors.WHITE}●{Colors.RED}█{Colors.WHITE}          {Colors.RED}█{Colors.WHITE}●{Colors.RED}█{Colors.WHITE}       ██{Colors.RESET}
+{Colors.WHITE}█                          █{Colors.RESET}
+{Colors.WHITE}█           {Colors.RED}█{Colors.WHITE}▀{Colors.RED}█{Colors.WHITE}          █{Colors.RESET}
+{Colors.WHITE} █▄▄▄▄▄▄{Colors.BLACK}██{Colors.WHITE}▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█{Colors.RESET}
 """
         print(logo)
 
+    # --- 输入处理 (依赖 Shell TTY) ---
     def get_user_input(self, prompt, default=""):
         full_prompt = f"{Colors.BOLD}{prompt}{Colors.RESET} [{default}]: " if default else f"{Colors.BOLD}{prompt}{Colors.RESET}: "
         try:
@@ -76,25 +83,33 @@ class EmbyScannerPro:
     def pause(self):
         self.get_user_input(f"\n按 {Colors.GREEN}回车键{Colors.RESET} 继续...")
 
+    # --- 网络请求 (Zero Dependency) ---
     def _request(self, endpoint, params=None):
+        """使用原生urllib发送请求，无需requests库"""
         url = f"{self.server_url}{endpoint}"
         if params:
             query_string = urllib.parse.urlencode(params)
             url += f"?{query_string}"
+        
         req = urllib.request.Request(url, headers=self.headers)
         try:
             with urllib.request.urlopen(req, timeout=15) as response:
                 return json.loads(response.read().decode('utf-8'))
+        except urllib.error.URLError as e:
+            print(f"{Colors.RED}❌ 请求失败: {e}{Colors.RESET}")
+            return None
         except Exception as e:
-            print(f"{Colors.RED}❌ 网络请求错误: {e}{Colors.RESET}")
+            print(f"{Colors.RED}❌ 未知错误: {e}{Colors.RESET}")
             return None
 
+    # --- 配置管理 ---
     def init_config(self):
         if not os.path.exists(self.data_dir):
-            try: 
+            try:
                 os.makedirs(self.data_dir, exist_ok=True)
-            except: 
+            except:
                 pass
+        
         config_file = os.path.join(self.data_dir, 'emby_config.json')
         if os.path.exists(config_file):
             try:
@@ -102,18 +117,26 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json'}
+                    self.headers = {
+                        'X-Emby-Token': self.api_key,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'EmbyScannerPro/3.6'
+                    }
                     return True
-            except: 
+            except:
                 pass
         return False
 
     def save_config(self):
-        config = {'server_url': self.server_url, 'api_key': self.api_key, 'updated': datetime.now().isoformat()}
+        config = {
+            'server_url': self.server_url,
+            'api_key': self.api_key,
+            'updated': datetime.now().isoformat()
+        }
         try:
             with open(os.path.join(self.data_dir, 'emby_config.json'), 'w') as f:
                 json.dump(config, f)
-            print(f"{Colors.GREEN}✅ 配置已保存{Colors.RESET}")
+            print(f"{Colors.GREEN}✅ 配置已保存至: {self.data_dir}/emby_config.json{Colors.RESET}")
         except Exception as e:
             print(f"{Colors.RED}⚠️ 配置保存失败: {e}{Colors.RESET}")
 
@@ -121,128 +144,199 @@ class EmbyScannerPro:
         self.clear_screen()
         self.print_banner()
         print(f"{Colors.YELLOW}首次设置向导{Colors.RESET}\n")
+        
         while True:
-            url = self.get_user_input("请输入 Emby 服务器地址").strip().rstrip('/')
+            url = self.get_user_input("请输入 Emby 服务器地址 (例如 http://localhost:8096)").strip().rstrip('/')
             if not url.startswith(('http://', 'https://')):
                 print(f"{Colors.RED}❌ 地址必须以 http:// 或 https:// 开头{Colors.RESET}")
                 continue
             self.server_url = url
             break
+
         self.api_key = self.get_user_input("请输入 API 密钥").strip()
         self.headers = {'X-Emby-Token': self.api_key}
+
         print("\n🔗 测试连接...")
         info = self._request("/emby/System/Info")
         if info:
-            print(f"{Colors.GREEN}✅ 连接成功: {info.get('ServerName')}{Colors.RESET}")
+            print(f"{Colors.GREEN}✅ 连接成功: {info.get('ServerName')} (v{info.get('Version')}){Colors.RESET}")
             self.save_config()
             self.pause()
             return True
         else:
-            print(f"{Colors.RED}❌ 连接失败{Colors.RESET}")
+            print(f"{Colors.RED}❌ 连接失败，请检查地址或密钥。{Colors.RESET}")
             self.pause()
             return False
 
+    # --- 扫描核心逻辑 (v3.6 HQ 增强：纯体积去重) ---
     def format_size(self, size_bytes):
-        if not size_bytes: return "0 B"
+        if not size_bytes: return "N/A"
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
             if size_bytes < 1024: return f"{size_bytes:.2f} {unit}"
             size_bytes /= 1024
         return f"{size_bytes:.2f} PB"
 
     def get_video_info(self, item):
+        """提取增强的视频信息 (Pro特性)"""
         media_sources = item.get('MediaSources', [])
-        if not media_sources: return ""
+        if not media_sources: return "未知格式"
+        
         info = []
         stream = media_sources[0]
+        
+        # 容器格式
         container = stream.get('Container', '').upper()
         if container: info.append(container)
+        
+        # 视频流信息
         video_streams = [s for s in stream.get('MediaStreams', []) if s.get('Type') == 'Video']
         if video_streams:
             v = video_streams[0]
+            # 分辨率
             width = v.get('Width')
             if width:
-                if width >= 3800: res = f"{Colors.CYAN}4K{Colors.RESET}"
-                elif width >= 1900: res = f"{Colors.GREEN}1080P{Colors.RESET}"
+                if width >= 3800: res = "4K"
+                elif width >= 1900: res = "1080P"
                 elif width >= 1200: res = "720P"
                 else: res = "SD"
-                info.append(res)
+                info.append(f"{Colors.CYAN}{res}{Colors.RESET}")
+            # 编码
             codec = v.get('Codec', '').upper()
             if codec: info.append(codec)
+            
         return " | ".join(info)
 
     def run_scanner(self):
         self.clear_screen()
         self.print_banner()
-        print(f"{Colors.YELLOW}🚀 正在获取媒体库列表...{Colors.RESET}")
+        print(f"{Colors.YELLOW}🚀 正在获取媒体库...{Colors.RESET}")
+        
         libs = self._request("/emby/Library/MediaFolders")
         if not libs: return
+
+        # 筛选库
         target_libs = [l for l in libs.get('Items', []) if l.get('CollectionType') in ['movies', 'tvshows']]
-        print(f"✅ 发现 {len(target_libs)} 个影视库，开始【纯体积】查重...\n")
-        report = ["🎬 Emby 媒体库重复文件报告 (HQ版)", "=" * 60, f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}", "去重策略: 仅基于文件体积 (大小完全一致即视为重复)", ""]
+        print(f"✅ 发现 {len(target_libs)} 个影视库，开始【纯体积】深度查重...\n")
+
+        report = [
+            "🎬 Emby 媒体库重复检测报告 (v3.6 HQ Size-Only)",
+            "=" * 60,
+            f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            f"检测逻辑: 仅基于文件体积 (Size) 匹配，忽略文件名和 TMDB ID",
+            ""
+        ]
+
         total_dups_groups = 0
         total_dups_files = 0
+
         for lib in target_libs:
             lib_name = lib.get('Name')
             lib_type = "Series" if lib.get('CollectionType') == 'tvshows' else "Movie"
-            print(f"📂 正在扫描库: {Colors.BOLD}{lib_name}{Colors.RESET}...")
-            params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': lib_type, 'Fields': 'Path,ProviderIds,MediaSources,Size,ProductionYear', 'Limit': 20000}
+            print(f"📂 正在扫描: {Colors.BOLD}{lib_name}{Colors.RESET} ({lib_type})...")
+
+            # 获取所有项目，Pro版本增加 MediaSources 字段以获取分辨率信息
+            params = {
+                'ParentId': lib['Id'],
+                'Recursive': 'true',
+                'IncludeItemTypes': lib_type,
+                'Fields': 'Path,ProviderIds,MediaSources,Size,ProductionYear', 
+                'Limit': 20000 # 增加上限
+            }
+            
             data = self._request("/emby/Items", params)
             if not data: continue
             items = data.get('Items', [])
-            size_map = defaultdict(list)
+
+            # --- 分组逻辑：纯体积 (Size) ---
+            size_groups = defaultdict(list)
+
             for item in items:
-                size = item.get('Size')
-                if not size or size == 0: continue
-                obj = {'name': item.get('Name'), 'year': item.get('ProductionYear'), 'path': item.get('Path'), 'size_fmt': self.format_size(size), 'info': self.get_video_info(item), 'id': item.get('Id')}
-                size_map[size].append(obj)
-            duplicate_groups = {k: v for k, v in size_map.items() if len(v) > 1}
+                # 核心修改：忽略 TMDB ID，只看 Size
+                item_size = item.get('Size')
+                
+                # 忽略无体积信息的项目或文件夹
+                if not item_size or item_size == 0:
+                    continue
+                
+                # 构造对象
+                obj = {
+                    'name': item.get('Name'),
+                    'path': item.get('Path'),
+                    'size': item_size,
+                    'info': self.get_video_info(item), # 获取Pro信息
+                    'year': item.get('ProductionYear')
+                }
+                
+                # 以体积为 Key 进行分组
+                size_groups[item_size].append(obj)
+
+            # --- 筛选重复 (数量 > 1) ---
+            duplicate_groups = {k: v for k, v in size_groups.items() if len(v) > 1}
+            
             if duplicate_groups:
                 report.append(f"📁 媒体库: {lib_name}")
                 report.append(f"🔴 发现 {len(duplicate_groups)} 组体积完全一致的文件:")
-                for size_bytes, group in duplicate_groups.items():
-                    total_dups_groups += 1
-                    total_dups_files += (len(group) - 1)
-                    size_str = self.format_size(size_bytes)
-                    report.append(f"  📦 体积: {size_str} (共 {len(group)} 个文件)")
-                    print(f"   ❌ 发现重复: {size_str} -> {group[0]['name']} 等 {len(group)} 个")
-                    for g in group:
-                        line = f"    - [{g['year']}] {g['name']} {g['info']}"
-                        report.append(line)
-                        report.append(f"      路径: {g['path']}")
-                    report.append("")
+                
+                for size, group in duplicate_groups.items():
+                    # 再次确认路径不同
+                    paths = set(g['path'] for g in group)
+                    if len(paths) > 1:
+                        total_dups_groups += 1
+                        total_dups_files += (len(group) - 1)
+                        
+                        size_str = self.format_size(size)
+                        report.append(f"  📦 体积: {size_str} (共 {len(group)} 个文件)")
+                        
+                        # 在控制台打印进度
+                        print(f"   ❌ 发现重复: {size_str} -> {group[0]['name']} 等 {len(group)} 个")
+
+                        for g in group:
+                            report.append(f"    - {g['name']} ({g['year']}) [{g['info']}]")
+                            report.append(f"      路径: {g['path']}")
+                        report.append("")
                 report.append("-" * 40)
             else:
                 print(f"   ✅ 该库未发现体积重复。")
+
+        # --- 结尾 ---
         report.append("=" * 60)
         if total_dups_groups == 0:
             report.append("🎉 完美！未发现任何体积重复的文件。")
-            print(f"\n{Colors.GREEN}🎉 扫描结束，未发现体积重复文件！{Colors.RESET}")
+            print(f"\n{Colors.GREEN}🎉 未发现体积重复文件！{Colors.RESET}")
         else:
-            summary = f"扫描完成。共发现 {total_dups_groups} 组重复，涉及 {total_dups_files} 个冗余文件。"
+            summary = f"共发现 {total_dups_groups} 组重复，涉及 {total_dups_files} 个冗余文件。"
             report.append(summary)
             print(f"\n{Colors.RED}🚨 {summary}{Colors.RESET}")
+
+        # 保存报告
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_path = os.path.join(self.data_dir, f"HQ_Report_{timestamp}.txt")
+        report_path = os.path.join(self.data_dir, f"report_{timestamp}.txt")
         try:
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(report))
-            print(f"📄 详细报告已生成: {Colors.BOLD}{report_path}{Colors.RESET}")
+            print(f"📄 报告已生成: {Colors.BOLD}{report_path}{Colors.RESET}")
         except Exception as e:
             print(f"❌ 报告保存失败: {e}")
+        
         self.pause()
 
+    # --- 菜单系统 ---
     def main_menu(self):
         while True:
             self.clear_screen()
             self.print_banner()
-            status = f"{Colors.GREEN}Online{Colors.RESET}" if self.server_url else f"{Colors.RED}Offline{Colors.RESET}"
-            print(f"  Server: {status} | Path: {self.data_dir}\n")
-            print(f"  {Colors.BOLD}1.{Colors.RESET} 🚀 开始去重扫描 (Volume Based)")
-            print(f"  {Colors.BOLD}2.{Colors.RESET} ⚙️  服务器配置")
-            print(f"  {Colors.BOLD}3.{Colors.RESET} 📊 历史报告")
-            print(f"  {Colors.BOLD}4.{Colors.RESET} 🗑️  重置数据")
-            print(f"  {Colors.BOLD}0.{Colors.RESET} 🚪 退出")
+            
+            status = f"{Colors.GREEN}已连接{Colors.RESET}" if self.server_url else f"{Colors.RED}未配置{Colors.RESET}"
+            print(f"状态: {status} | 存储: {self.data_dir}\n")
+            
+            print(f"{Colors.BOLD}1.{Colors.RESET} 🚀 开始扫描 (Size Only)")
+            print(f"{Colors.BOLD}2.{Colors.RESET} ⚙️  配置服务器")
+            print(f"{Colors.BOLD}3.{Colors.RESET} 📊 查看历史报告")
+            print(f"{Colors.BOLD}4.{Colors.RESET} 🗑️  重置/删除配置")
+            print(f"{Colors.BOLD}0.{Colors.RESET} 🚪 退出")
+            
             choice = self.get_user_input("\n请选择").strip()
+            
             if choice == '1':
                 if not self.server_url:
                     print(f"{Colors.RED}请先配置服务器！{Colors.RESET}")
@@ -265,15 +359,19 @@ class EmbyScannerPro:
             print("暂无报告。")
             self.pause()
             return
+
         files = [f for f in os.listdir(self.data_dir) if f.endswith('.txt')]
         files.sort(reverse=True)
+        
         if not files:
             print("暂无报告。")
             self.pause()
             return
-        print(f"{Colors.YELLOW}📜 历史报告:{Colors.RESET}")
+
+        print(f"{Colors.YELLOW}📜 历史报告列表:{Colors.RESET}")
         for i, f in enumerate(files[:10]):
             print(f"{i+1}. {f}")
+        
         choice = self.get_user_input("\n输入序号查看 (0返回)").strip()
         if choice.isdigit() and 0 < int(choice) <= len(files):
             file_path = os.path.join(self.data_dir, files[int(choice)-1])
@@ -281,7 +379,7 @@ class EmbyScannerPro:
             self.pause()
 
     def reset_config(self):
-        confirm = self.get_user_input(f"删除所有配置和报告? (y/n)").lower()
+        confirm = self.get_user_input(f"确定要删除所有配置和报告吗? (y/n)").lower()
         if confirm == 'y':
             import shutil
             try:
@@ -293,13 +391,15 @@ class EmbyScannerPro:
                 print(f"重置失败: {e}")
             self.pause()
 
+# ==================== 入口 ====================
 if __name__ == "__main__":
     try:
         app = EmbyScannerPro()
         app.init_config()
+        # 如果未配置，自动进入向导
         if not app.server_url:
             app.setup_wizard()
         app.main_menu()
     except KeyboardInterrupt:
-        print("\nBye.")
+        print("\n退出。")
         sys.exit(0)
