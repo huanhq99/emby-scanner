@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v3.6 Size-Only Edition
+Emby媒体库重复检测工具 v3.7 Size-Only Edition
 GitHub: https://github.com/huanhq99/emby-scanner
-核心升级: 
-1. 逻辑重构：纯体积(Size)去重，忽略 TMDB ID，专治"同大异名"
-2. UI：集成 HQ 像素风 ASCII Banner
-3. 架构：Zero-Dependency (原生 urllib)
+核心功能: 
+1. 逻辑：纯体积(Size)去重，忽略 TMDB ID，专治"同大异名"
+2. UI：回归 v3.0 经典简洁方框 Banner
+3. 架构：Zero-Dependency (原生 urllib) + 路径防呆修复
 """
 
 import os
@@ -25,16 +25,14 @@ class Colors:
     GREEN = "\033[92m"
     YELLOW = "\033[93m"
     BLUE = "\033[94m"
-    MAGENTA = "\033[95m"
     CYAN = "\033[96m"
-    WHITE = "\033[97m"
     BOLD = "\033[1m"
 
 # ==================== 主程序类 ====================
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "3.6 HQ"
+        self.version = "3.7 Size-Only"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -52,22 +50,15 @@ class EmbyScannerPro:
 
     def print_banner(self):
         """
-        HQ 像素风 ASCII Art (v3.6)
+        回归 v3.0 经典简洁方框 Banner
         """
-        logo = f"""
-{Colors.RED}       ██████████████████████████{Colors.RESET}
-{Colors.RED}     ██{Colors.WHITE}█{Colors.RED}             {Colors.WHITE}█{Colors.RED}██{Colors.RESET}
-{Colors.RED}    ██ {Colors.WHITE}██████{Colors.RED}█ {Colors.WHITE}█{Colors.RED}██{Colors.WHITE} █{Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}
-{Colors.RED}   █  {Colors.WHITE}█{Colors.RED}██{Colors.WHITE}██{Colors.RED}█ {Colors.WHITE}█{Colors.RED}██{Colors.WHITE} █{Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}    {Colors.YELLOW}Emby Duplicate Scanner{Colors.RESET}
-{Colors.RED}  █   {Colors.WHITE}█{Colors.RED}██{Colors.WHITE}██{Colors.RED}█ {Colors.WHITE}█{Colors.RED}██{Colors.WHITE} █{Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}    {Colors.CYAN}v{self.version}{Colors.RESET}
-{Colors.RED} █    {Colors.WHITE}▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ {Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}
-{Colors.RED}██     {Colors.YELLOW}███████████████████{Colors.RED}██{Colors.RESET}   {Colors.MAGENTA}[ Mode: Size-Only ]{Colors.RESET}
-{Colors.WHITE}██       {Colors.RED}█{Colors.WHITE}●{Colors.RED}█{Colors.WHITE}          {Colors.RED}█{Colors.WHITE}●{Colors.RED}█{Colors.WHITE}       ██{Colors.RESET}
-{Colors.WHITE}█                          █{Colors.RESET}
-{Colors.WHITE}█           {Colors.RED}█{Colors.WHITE}▀{Colors.RED}█{Colors.WHITE}          █{Colors.RESET}
-{Colors.WHITE} █▄▄▄▄▄▄{Colors.BLACK}██{Colors.WHITE}▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█{Colors.RESET}
-"""
-        print(logo)
+        banner = f"""
+{Colors.CYAN}╔════════════════════════════════════════════════════════════════╗
+║             Emby媒体库重复检测工具 {Colors.YELLOW}v{self.version}{Colors.CYAN}              
+║             {Colors.RESET}Zero-Dependency | Size-Only Mode | Color UI{Colors.CYAN}             
+╚════════════════════════════════════════════════════════════════╝{Colors.RESET}
+        """
+        print(banner)
 
     # --- 输入处理 (依赖 Shell TTY) ---
     def get_user_input(self, prompt, default=""):
@@ -120,7 +111,7 @@ class EmbyScannerPro:
                     self.headers = {
                         'X-Emby-Token': self.api_key,
                         'Content-Type': 'application/json',
-                        'User-Agent': 'EmbyScannerPro/3.6'
+                        'User-Agent': 'EmbyScannerPro/3.7'
                     }
                     return True
             except:
@@ -168,7 +159,7 @@ class EmbyScannerPro:
             self.pause()
             return False
 
-    # --- 扫描核心逻辑 (v3.6 HQ 增强：纯体积去重) ---
+    # --- 扫描核心逻辑 (v3.7 纯体积去重) ---
     def format_size(self, size_bytes):
         if not size_bytes: return "N/A"
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -177,7 +168,7 @@ class EmbyScannerPro:
         return f"{size_bytes:.2f} PB"
 
     def get_video_info(self, item):
-        """提取增强的视频信息 (Pro特性)"""
+        """提取增强的视频信息"""
         media_sources = item.get('MediaSources', [])
         if not media_sources: return "未知格式"
         
@@ -219,7 +210,7 @@ class EmbyScannerPro:
         print(f"✅ 发现 {len(target_libs)} 个影视库，开始【纯体积】深度查重...\n")
 
         report = [
-            "🎬 Emby 媒体库重复检测报告 (v3.6 HQ Size-Only)",
+            "🎬 Emby 媒体库重复检测报告 (v3.7 Size-Only)",
             "=" * 60,
             f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             f"检测逻辑: 仅基于文件体积 (Size) 匹配，忽略文件名和 TMDB ID",
@@ -234,13 +225,13 @@ class EmbyScannerPro:
             lib_type = "Series" if lib.get('CollectionType') == 'tvshows' else "Movie"
             print(f"📂 正在扫描: {Colors.BOLD}{lib_name}{Colors.RESET} ({lib_type})...")
 
-            # 获取所有项目，Pro版本增加 MediaSources 字段以获取分辨率信息
+            # 获取所有项目
             params = {
                 'ParentId': lib['Id'],
                 'Recursive': 'true',
                 'IncludeItemTypes': lib_type,
                 'Fields': 'Path,ProviderIds,MediaSources,Size,ProductionYear', 
-                'Limit': 20000 # 增加上限
+                'Limit': 20000 
             }
             
             data = self._request("/emby/Items", params)
@@ -263,7 +254,7 @@ class EmbyScannerPro:
                     'name': item.get('Name'),
                     'path': item.get('Path'),
                     'size': item_size,
-                    'info': self.get_video_info(item), # 获取Pro信息
+                    'info': self.get_video_info(item),
                     'year': item.get('ProductionYear')
                 }
                 
@@ -278,7 +269,7 @@ class EmbyScannerPro:
                 report.append(f"🔴 发现 {len(duplicate_groups)} 组体积完全一致的文件:")
                 
                 for size, group in duplicate_groups.items():
-                    # 再次确认路径不同
+                    # 再次确认路径不同，防止同一个文件被扫多次
                     paths = set(g['path'] for g in group)
                     if len(paths) > 1:
                         total_dups_groups += 1
