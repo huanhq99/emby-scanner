@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v4.2 Smart-Episode Edition
+Emby媒体库重复检测工具 v5.0 Universal-Delete Edition
 GitHub: https://github.com/huanhq99/emby-scanner
 核心升级: 
-1. 剧集去重逻辑修正：剧集查重必须满足 [剧集名+季+集+体积] 完全一致才算重复，避免不同集数因体积相同被误报。
-2. 电影保持纯体积去重。
-3. 架构：Zero-Dependency / Timeout Fix / Clean UI
+1. 新增【远程删除】模式：通过生成 Emby API (curl) 指令脚本，支持跨设备/异地删除库内文件。
+2. 逻辑：纯体积(Size)去重 + 智能保留(文件名最长)。
+3. 架构：Zero-Dependency / Clean UI
 """
 
 import os
@@ -33,11 +33,14 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "4.2 Smart-Ep"
+        self.version = "5.0 Universal"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
         self.headers = {}
+
+        # 存储扫描结果
+        self.last_scan_results = {} 
 
         # --- 核心路径修复逻辑 ---
         home_dir = os.environ.get('HOME')
@@ -52,7 +55,7 @@ class EmbyScannerPro:
         banner = f"""
 {Colors.CYAN}╔════════════════════════════════════════════════════════════════╗
 ║             Emby媒体库重复检测工具 {Colors.YELLOW}v{self.version}{Colors.CYAN}              
-║             {Colors.RESET}Zero-Dependency | Smart Episode Logic{Colors.CYAN}             
+║             {Colors.RESET}Remote Delete Support | Size-Only Mode{Colors.CYAN}                
 ╚════════════════════════════════════════════════════════════════╝{Colors.RESET}
         """
         print(banner)
@@ -115,7 +118,7 @@ class EmbyScannerPro:
                     self.headers = {
                         'X-Emby-Token': self.api_key,
                         'Content-Type': 'application/json',
-                        'User-Agent': 'EmbyScannerPro/4.2'
+                        'User-Agent': 'EmbyScannerPro/5.0'
                     }
                     return True
             except: pass
@@ -202,7 +205,7 @@ class EmbyScannerPro:
         print("-" * 70)
 
         report = [
-            "🎬 Emby 媒体库重复检测报告 (v4.2 Smart-Ep)",
+            "🎬 Emby 媒体库重复检测报告 (v5.0 Universal)",
             "=" * 60,
             f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"去重策略:",
@@ -211,6 +214,7 @@ class EmbyScannerPro:
             ""
         ]
 
+        self.last_scan_results = {} 
         total_scan_dups_groups = 0
         total_scan_redundant_bytes = 0
 
@@ -243,37 +247,29 @@ class EmbyScannerPro:
             items = data.get('Items', [])
             total_lib_bytes = sum(item.get('Size', 0) for item in items)
 
-            # --- 核心重构：分组逻辑 ---
-            # 使用字典的 Key 来区分唯一性
-            # 电影 Key: 体积
-            # 剧集 Key: (剧集名, 季号, 集号, 体积)
+            # 分组逻辑
             groups = defaultdict(list)
-
             for item in items:
                 item_size = item.get('Size')
                 if not item_size or item_size == 0: continue
                 
                 name = item.get('Name')
-                
-                # 构造分组 Key
                 if collection_type == 'tvshows':
                     series_name = item.get('SeriesName', 'Unknown')
-                    season = item.get('ParentIndexNumber', -1) # -1 表示未知季
-                    episode = item.get('IndexNumber', -1)      # -1 表示未知集
+                    season = item.get('ParentIndexNumber', -1)
+                    episode = item.get('IndexNumber', -1)
                     
-                    # 构造显示名称
                     if season != -1 and episode != -1:
                         name = f"{series_name} S{season:02d}E{episode:02d} - {name}"
                     elif series_name:
                          name = f"{series_name} - {name}"
                     
-                    # 剧集唯一 Key：必须是 同一部剧 + 同一集 + 同样大小
                     group_key = (series_name, season, episode, item_size)
                 else:
-                    # 电影唯一 Key：只看大小
                     group_key = item_size
 
                 obj = {
+                    'id': item.get('Id'), # 关键：记录ID用于API删除
                     'name': name,
                     'path': item.get('Path'),
                     'size': item_size,
@@ -282,23 +278,20 @@ class EmbyScannerPro:
                 }
                 groups[group_key].append(obj)
 
-            # --- 筛选重复 ---
+            # 筛选重复
             duplicate_groups = {k: v for k, v in groups.items() if len(v) > 1}
             
             lib_redundant_bytes = 0
             lib_dup_groups_count = 0
+            lib_dups_list = [] 
 
             if duplicate_groups:
                 report.append(f"📁 媒体库: {lib_name} | 库占用: {self.format_size(total_lib_bytes)}")
                 report.append(f"🔴 发现 {len(duplicate_groups)} 组重复:")
                 
                 for key, group in duplicate_groups.items():
-                    # 获取该组文件的体积
-                    # 如果是电影，key就是size；如果是剧集，key是tuple，最后一个元素是size
-                    if isinstance(key, tuple):
-                        size = key[3] 
-                    else:
-                        size = key
+                    if isinstance(key, tuple): size = key[3] 
+                    else: size = key
                     
                     paths = set(g['path'] for g in group)
                     if len(paths) > 1:
@@ -306,6 +299,11 @@ class EmbyScannerPro:
                         wasted = (count - 1) * size
                         lib_redundant_bytes += wasted
                         lib_dup_groups_count += 1
+                        
+                        lib_dups_list.append({
+                            "size": size,
+                            "files": group
+                        })
                         
                         size_str = self.format_size(size)
                         report.append(f"  📦 单文件体积: {size_str} | 冗余: {count-1} 份 (共 {count} 个文件)")
@@ -318,15 +316,14 @@ class EmbyScannerPro:
                 
                 if lib_dup_groups_count > 0:
                      report.append("-" * 40)
+                     self.last_scan_results[lib_name] = lib_dups_list
                 else:
-                     # 如果发现的全是同路径(Emby内部错误)，就不显示
-                     report.pop() # remove header
-                     report.pop() # remove header
+                     report.pop(); report.pop()
 
             total_scan_dups_groups += lib_dup_groups_count
             total_scan_redundant_bytes += lib_redundant_bytes
 
-            # --- UI 输出 ---
+            # UI 输出
             cap_str = self.format_size(total_lib_bytes)
             if lib_redundant_bytes > 0:
                 dup_str = f"{Colors.RED}{self.format_size(lib_redundant_bytes)}{Colors.RESET}"
@@ -344,20 +341,107 @@ class EmbyScannerPro:
         summary = f"扫描结束。共发现 {total_scan_dups_groups} 组重复，总计浪费空间: {self.format_size(total_scan_redundant_bytes)}"
         report.append(summary)
         
-        if total_scan_dups_groups == 0:
-            print(f"\n{Colors.GREEN}🎉 完美！所有媒体库均未发现重复文件。{Colors.RESET}")
-        else:
-            print(f"\n{Colors.RED}🚨 扫描结束。发现可释放空间: {self.format_size(total_scan_redundant_bytes)}{Colors.RESET}")
-
-        # 保存
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_path = os.path.join(self.data_dir, f"report_{timestamp}.txt")
         try:
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(report))
-            print(f"📄 详细清单已生成: {Colors.BOLD}{report_path}{Colors.RESET}")
+            print(f"\n📄 报告已生成: {Colors.BOLD}{report_path}{Colors.RESET}")
         except Exception as e:
             print(f"❌ 报告保存失败: {e}")
+
+        # --- 触发清理向导 ---
+        if self.last_scan_results:
+            self.cleanup_wizard()
+        else:
+            print(f"{Colors.GREEN}🎉 完美！未发现重复内容。{Colors.RESET}")
+            self.pause()
+
+    # --- 清理脚本生成器 (v5.0 双模式) ---
+    def cleanup_wizard(self):
+        print(f"\n{Colors.YELLOW}💡 发现重复文件！请选择清理模式：{Colors.RESET}")
+        print("   规则: 保留文件名最长(信息最全)的文件，删除其他相同大小的副本。")
+        print(f"   {Colors.CYAN}1. 本地删除 (rm命令){Colors.RESET} -> 仅当脚本与媒体库在同一台机器时使用")
+        print(f"   {Colors.CYAN}2. 远程删除 (API调用){Colors.RESET} -> 适用于VPS远程管理，通过Emby API删除 (需开启允许删除权限)")
+        
+        mode = self.get_user_input("请选择模式 [1/2]").strip()
+        if mode not in ['1', '2']:
+            print("取消操作。")
+            return
+
+        is_remote = (mode == '2')
+        mode_name = "REMOTE_API" if is_remote else "LOCAL_RM"
+
+        # 选择库
+        libs = list(self.last_scan_results.keys())
+        print(f"\n{Colors.CYAN}请选择要清理的媒体库:{Colors.RESET}")
+        for i, lib in enumerate(libs):
+            print(f"  {i+1}. {lib} ({len(self.last_scan_results[lib])} 组重复)")
+        
+        choice = self.get_user_input("输入序号 (0=全部生成)").strip()
+        
+        target_libs = []
+        if choice == '0':
+            target_libs = libs
+        elif choice.isdigit() and 0 < int(choice) <= len(libs):
+            target_libs = [libs[int(choice)-1]]
+        else:
+            print("取消操作。")
+            return
+
+        # 生成脚本内容
+        script_content = ["#!/bin/bash", f"# Emby Duplicate Cleaner ({mode_name})", f"# Generated: {datetime.now()}", ""]
+        
+        if is_remote:
+            script_content.append(f"# WARNING: API Delete Mode. Files will be deleted from server via API.")
+            script_content.append(f"API_KEY='{self.api_key}'")
+            script_content.append(f"HOST='{self.server_url}'")
+            script_content.append("")
+
+        total_cmds = 0
+        for lib in target_libs:
+            script_content.append(f"# === Library: {lib} ===")
+            groups = self.last_scan_results[lib]
+            
+            for group in groups:
+                files = group['files']
+                # 规则：保留文件名最长的
+                sorted_files = sorted(files, key=lambda x: len(os.path.basename(x['path'])), reverse=True)
+                keep_file = sorted_files[0]
+                delete_files = sorted_files[1:]
+                
+                if not delete_files: continue
+
+                script_content.append(f"# Group: Size {self.format_size(group['size'])}")
+                script_content.append(f"# KEEP: {os.path.basename(keep_file['path'])}")
+                
+                for f in delete_files:
+                    if is_remote:
+                        # 远程 API 删除
+                        cmd = f'curl -X DELETE "$HOST/emby/Items/{f["id"]}?api_key=$API_KEY" && echo "Deleted ID {f["id"]}: {os.path.basename(f["path"])}"'
+                    else:
+                        # 本地 RM 删除
+                        cmd = f'rm -v "{f["path"]}"'
+                    
+                    script_content.append(cmd)
+                    total_cmds += 1
+                script_content.append("")
+
+        # 保存 .sh 文件
+        sh_name = f"clean_{mode_name.lower()}_{datetime.now().strftime('%H%M%S')}.sh"
+        sh_path = os.path.join(self.data_dir, sh_name)
+        
+        try:
+            with open(sh_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(script_content))
+            os.chmod(sh_path, 0o755)
+            
+            print(f"\n{Colors.GREEN}✅ 清理脚本已生成！包含 {total_cmds} 条删除命令。{Colors.RESET}")
+            print(f"📍 脚本路径: {Colors.BOLD}{sh_path}{Colors.RESET}")
+            print(f"⚠️  注意: 请务必先查看脚本内容，确认无误后再执行！")
+            print(f"👉 执行命令: {Colors.YELLOW}bash {sh_path}{Colors.RESET}")
+        except Exception as e:
+            print(f"❌ 脚本生成失败: {e}")
         
         self.pause()
 
@@ -370,7 +454,7 @@ class EmbyScannerPro:
             status = f"{Colors.GREEN}已连接{Colors.RESET}" if self.server_url else f"{Colors.RED}未配置{Colors.RESET}"
             print(f"状态: {status} | 存储: {self.data_dir}\n")
             
-            print(f"{Colors.BOLD}1.{Colors.RESET} 🚀 开始扫描 (Smart Mode)")
+            print(f"{Colors.BOLD}1.{Colors.RESET} 🚀 开始扫描 (Size Only)")
             print(f"{Colors.BOLD}2.{Colors.RESET} ⚙️  配置服务器")
             print(f"{Colors.BOLD}3.{Colors.RESET} 📊 查看历史报告")
             print(f"{Colors.BOLD}4.{Colors.RESET} 🗑️  重置/删除配置")
@@ -400,13 +484,13 @@ class EmbyScannerPro:
             print("暂无报告。")
             self.pause()
             return
-        files = [f for f in os.listdir(self.data_dir) if f.endswith('.txt')]
+        files = [f for f in os.listdir(self.data_dir) if f.endswith('.txt') or f.endswith('.sh')]
         files.sort(reverse=True)
         if not files:
             print("暂无报告。")
             self.pause()
             return
-        print(f"{Colors.YELLOW}📜 历史报告列表:{Colors.RESET}")
+        print(f"{Colors.YELLOW}📜 历史文件 (报告/脚本):{Colors.RESET}")
         for i, f in enumerate(files[:10]):
             print(f"{i+1}. {f}")
         choice = self.get_user_input("\n输入序号查看 (0返回)").strip()
