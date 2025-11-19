@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v6.0 Manual-Select Edition
+Emby媒体库重复检测工具 v6.1 Auto/Manual Dual Mode
 GitHub: https://github.com/huanhq99/emby-scanner
 核心升级: 
-1. 手动精选模式：针对重复组，逐一列出详情，用户手动输入序号选择删除对象。
-2. 解决合并误删：放弃 API 删除，改用物理路径 rm 删除，完美避开 Emby 跨库合并导致的"连坐"问题。
-3. 架构：Zero-Dependency / Clean UI
+1. 双模式选择：提供【自动批量生成】(保留文件名最长) 和 【手动逐个精选】两种模式。
+2. 交互优化：解决逐个确认太繁琐的问题。
+3. 安全机制：继续使用 rm 物理删除，防止 Emby 跨库合并误删。
 """
 
 import os
@@ -15,7 +15,6 @@ import time
 import urllib.request
 import urllib.error
 import urllib.parse
-import getpass
 from collections import defaultdict
 from datetime import datetime
 
@@ -34,7 +33,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "6.0 Manual-Select"
+        self.version = "6.1 Dual-Mode"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -53,7 +52,7 @@ class EmbyScannerPro:
         banner = f"""
 {Colors.CYAN}╔════════════════════════════════════════════════════════════════╗
 ║             Emby媒体库重复检测工具 {Colors.YELLOW}v{self.version}{Colors.CYAN}              
-║             {Colors.RESET}Manual Select | Safe for Merged Items | Size-Only{Colors.CYAN}     
+║             {Colors.RESET}Auto Batch Script | Manual Select | Size-Only{Colors.CYAN}     
 ╚════════════════════════════════════════════════════════════════╝{Colors.RESET}
         """
         print(banner)
@@ -61,6 +60,7 @@ class EmbyScannerPro:
     def get_user_input(self, prompt, default=""):
         full_prompt = f"{Colors.BOLD}{prompt}{Colors.RESET} [{default}]: " if default else f"{Colors.BOLD}{prompt}{Colors.RESET}: "
         try:
+            # 使用标准 input，并在之前刷新 stdout 确保提示显示
             sys.stdout.write(full_prompt)
             sys.stdout.flush()
             user_input = sys.stdin.readline().strip()
@@ -69,7 +69,9 @@ class EmbyScannerPro:
             sys.exit(0)
 
     def pause(self):
-        self.get_user_input(f"\n按 {Colors.GREEN}回车键{Colors.RESET} 继续...")
+        print(f"\n按 {Colors.GREEN}回车键{Colors.RESET} 继续...", end="")
+        sys.stdout.flush()
+        sys.stdin.readline()
 
     def _request(self, endpoint, params=None, method='GET'):
         url = f"{self.server_url}{endpoint}"
@@ -111,7 +113,7 @@ class EmbyScannerPro:
                     self.headers = {
                         'X-Emby-Token': self.api_key,
                         'Content-Type': 'application/json',
-                        'User-Agent': 'EmbyScannerPro/6.0'
+                        'User-Agent': 'EmbyScannerPro/6.1'
                     }
                     return True
             except: pass
@@ -156,7 +158,7 @@ class EmbyScannerPro:
         info = []
         stream = media_sources[0]
         container = stream.get('Container', '').upper()
-        # if container: info.append(container) # 简化显示
+        # if container: info.append(container)
         video_streams = [s for s in stream.get('MediaStreams', []) if s.get('Type') == 'Video']
         if video_streams:
             v = video_streams[0]
@@ -166,17 +168,13 @@ class EmbyScannerPro:
                 elif width >= 1900: res = "1080P"
                 elif width >= 1200: res = "720P"
                 else: res = "SD"
-                # 颜色高亮分辨率，方便选择
                 if res == "4K": res = f"{Colors.MAGENTA}4K{Colors.RESET}"
                 elif res == "1080P": res = f"{Colors.GREEN}1080P{Colors.RESET}"
                 info.append(res)
             codec = v.get('Codec', '').upper()
             if codec: info.append(codec)
-        
-        # 增加 HDR/DV 检测
         if 'HDR' in str(video_streams).upper(): info.append(f"{Colors.YELLOW}HDR{Colors.RESET}")
         if 'DOLBY' in str(video_streams).upper() or 'DV' in str(video_streams).upper(): info.append(f"{Colors.CYAN}DV{Colors.RESET}")
-            
         return " | ".join(info)
 
     def run_scanner(self):
@@ -263,29 +261,68 @@ class EmbyScannerPro:
             print(f"{Colors.BOLD}{lib_name:<20}{Colors.RESET} | {self.format_size(total_bytes):<12} | {dup_str:<24} | {status:<10}")
 
         if self.last_scan_results:
-            self.manual_select_wizard()
+            self.clean_menu()
         else:
             print(f"\n{Colors.GREEN}🎉 完美！未发现重复。{Colors.RESET}")
             self.pause()
 
-    # --- v6.0 核心：手动选择向导 ---
-    def manual_select_wizard(self):
-        print(f"\n{Colors.YELLOW}💡 发现重复文件！进入手动选择模式。{Colors.RESET}")
-        print(f"   说明: 您将逐个查看重复组，并手动输入序号选择要{Colors.RED}【删除】{Colors.RESET}的文件。")
+    # --- 菜单：选择清理模式 ---
+    def clean_menu(self):
+        print(f"\n{Colors.YELLOW}💡 发现重复文件！请选择操作模式：{Colors.RESET}")
+        print(f"   {Colors.BOLD}1.{Colors.RESET} {Colors.GREEN}自动批量模式{Colors.RESET} (推荐) -> 按规则自动保留最佳文件，生成清理脚本")
+        print(f"   {Colors.BOLD}2.{Colors.RESET} {Colors.CYAN}手动精选模式{Colors.RESET} -> 逐个查看重复组，手动选择要删除的文件")
+        print(f"   {Colors.BOLD}0.{Colors.RESET} 退出")
         
+        mode = self.get_user_input("请选择 [1/2/0]").strip()
+        
+        if mode == '1':
+            self.auto_batch_wizard()
+        elif mode == '2':
+            self.manual_select_wizard()
+        else:
+            return
+
+    # --- 模式1: 自动批量生成脚本 ---
+    def auto_batch_wizard(self):
         libs = list(self.last_scan_results.keys())
-        print(f"\n{Colors.CYAN}选择要清理的媒体库:{Colors.RESET}")
+        print(f"\n{Colors.CYAN}选择要处理的媒体库:{Colors.RESET}")
         for i, lib in enumerate(libs):
             print(f"  {i+1}. {lib} ({len(self.last_scan_results[lib])} 组重复)")
         
-        choice = self.get_user_input("序号 (0=全部)").strip()
+        choice = self.get_user_input("序号 (0=全部处理)").strip()
         target_libs = []
         if choice == '0': target_libs = libs
         elif choice.isdigit() and 0 < int(choice) <= len(libs): target_libs = [libs[int(choice)-1]]
         else: return
 
+        print(f"\n{Colors.YELLOW}正在按规则 [保留文件名最长] 生成脚本...{Colors.RESET}")
         final_delete_list = []
+        
+        for lib in target_libs:
+            groups = self.last_scan_results[lib]
+            for group in groups:
+                files = group['files']
+                # 规则：按文件名长度降序 -> 第一个是最长的（保留），剩下的删除
+                sorted_files = sorted(files, key=lambda x: len(os.path.basename(x['path'])), reverse=True)
+                
+                # 记录要删除的文件
+                final_delete_list.extend(sorted_files[1:])
 
+        self.generate_sh(final_delete_list, "auto_batch")
+
+    # --- 模式2: 手动逐个选择 ---
+    def manual_select_wizard(self):
+        libs = list(self.last_scan_results.keys())
+        print(f"\n{Colors.CYAN}选择要手动清理的媒体库:{Colors.RESET}")
+        for i, lib in enumerate(libs):
+            print(f"  {i+1}. {lib} ({len(self.last_scan_results[lib])} 组重复)")
+        
+        choice = self.get_user_input("序号").strip()
+        target_libs = []
+        if choice.isdigit() and 0 < int(choice) <= len(libs): target_libs = [libs[int(choice)-1]]
+        else: return
+
+        final_delete_list = []
         for lib in target_libs:
             groups = self.last_scan_results[lib]
             print(f"\n{Colors.BOLD}>>> 正在处理库: {lib}{Colors.RESET}")
@@ -293,53 +330,42 @@ class EmbyScannerPro:
             for idx, group in enumerate(groups):
                 files = group['files']
                 size_str = self.format_size(group['size'])
-                
                 print(f"\n{Colors.YELLOW}--- [第 {idx+1}/{len(groups)} 组] 体积: {size_str} ---{Colors.RESET}")
                 
-                # 列出该组所有文件
                 for i, f in enumerate(files):
-                    # 提取简短文件名以便阅读
                     fname = os.path.basename(f['path'])
                     print(f"  [{Colors.CYAN}{i+1}{Colors.RESET}] {f['name']} [{f['info']}]")
                     print(f"      📂 {fname}")
                 
-                print(f"  {Colors.WHITE}[s]{Colors.RESET} 跳过此组")
+                print(f"  {Colors.WHITE}[Enter]{Colors.RESET} 跳过")
+                user_sel = self.get_user_input(f"输入要{Colors.RED}删除{Colors.RESET}的序号 (如 1)").strip()
                 
-                user_sel = self.get_user_input(f"请输入要{Colors.RED}删除{Colors.RESET}的序号 (多选逗号隔开, 如 1,3)").strip().lower()
-                
-                if user_sel == 's' or user_sel == '':
-                    print("已跳过。")
-                    continue
-                
-                try:
-                    # 解析用户输入 "1, 3" -> [0, 2]
-                    selected_indices = [int(x.strip()) - 1 for x in user_sel.split(',') if x.strip().isdigit()]
-                    
-                    for sel_idx in selected_indices:
-                        if 0 <= sel_idx < len(files):
-                            file_to_del = files[sel_idx]
-                            final_delete_list.append(file_to_del)
-                            print(f"      {Colors.RED}🔻 已标记删除: {os.path.basename(file_to_del['path'])}{Colors.RESET}")
-                except:
-                    print("输入无效，跳过此组。")
+                if user_sel:
+                    try:
+                        indices = [int(x.strip()) - 1 for x in user_sel.split(',') if x.strip().isdigit()]
+                        for sel_idx in indices:
+                            if 0 <= sel_idx < len(files):
+                                final_delete_list.append(files[sel_idx])
+                                print(f"      {Colors.RED}🔻 已标记删除{Colors.RESET}")
+                    except: pass
 
-        if not final_delete_list:
-            print("\n未选择任何文件。")
+        self.generate_sh(final_delete_list, "manual_select")
+
+    # --- 通用脚本生成 ---
+    def generate_sh(self, delete_list, mode_name):
+        if not delete_list:
+            print("未选择任何文件。")
             return
 
-        # 生成脚本
-        print(f"\n{Colors.YELLOW}正在生成清理脚本...{Colors.RESET}")
-        script_content = ["#!/bin/bash", "# Emby Duplicate Cleaner (Manual Select)", f"# Generated: {datetime.now()}", ""]
-        
+        script_content = ["#!/bin/bash", f"# Emby Duplicate Cleaner ({mode_name})", f"# Generated: {datetime.now()}", ""]
         total_cmds = 0
-        for f in final_delete_list:
-            # 使用 rm 命令精准删除文件路径
-            # 增加 -f 强制删除，不提示
+        
+        for f in delete_list:
             cmd = f'rm -v "{f["path"]}"'
             script_content.append(cmd)
             total_cmds += 1
             
-        sh_name = f"clean_manual_{datetime.now().strftime('%H%M%S')}.sh"
+        sh_name = f"clean_{mode_name}_{datetime.now().strftime('%H%M%S')}.sh"
         sh_path = os.path.join(self.data_dir, sh_name)
         
         try:
@@ -349,7 +375,7 @@ class EmbyScannerPro:
             print(f"\n{Colors.GREEN}✅ 脚本生成成功！包含 {total_cmds} 个删除指令。{Colors.RESET}")
             print(f"📍 脚本路径: {Colors.BOLD}{sh_path}{Colors.RESET}")
             print(f"👉 请执行: {Colors.YELLOW}bash {sh_path}{Colors.RESET}")
-            print(f"\n{Colors.MAGENTA}提示: 执行脚本后，strm 文件会被物理删除。请等待 Emby 自动扫描或手动触发扫描以更新媒体库。{Colors.RESET}")
+            print(f"\n{Colors.MAGENTA}提示: 执行脚本将物理删除 strm 文件。{Colors.RESET}")
         except Exception as e:
             print(f"❌ 脚本生成失败: {e}")
         
