@@ -67,7 +67,6 @@ def print_banner(self):
 {Colors.WHITE}╚══════════════════════════════╝{Colors.RESET}
 """
         print(logo)
-
     # --- 输入处理 ---
     def get_user_input(self, prompt, default=""):
         full_prompt = f"{Colors.BOLD}{prompt}{Colors.RESET} [{default}]: " if default else f"{Colors.BOLD}{prompt}{Colors.RESET}: "
