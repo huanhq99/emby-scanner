@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v3.7 Size-Only Edition
+Emby媒体库重复检测工具 v3.8 Size-Only Edition
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
-1. 逻辑：纯体积(Size)去重，忽略 TMDB ID，专治"同大异名"
-2. UI：回归 v3.0 经典简洁方框 Banner
-3. 架构：Zero-Dependency (原生 urllib) + 路径防呆修复
+1. 逻辑：纯体积(Size)去重，忽略 TMDB ID
+2. 新增：媒体库容量统计 (Total Library Size)
+3. 架构：Zero-Dependency (原生 urllib)
 """
 
 import os
@@ -25,6 +25,7 @@ class Colors:
     GREEN = "\033[92m"
     YELLOW = "\033[93m"
     BLUE = "\033[94m"
+    MAGENTA = "\033[95m"
     CYAN = "\033[96m"
     BOLD = "\033[1m"
 
@@ -32,14 +33,13 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "3.7 Size-Only"
+        self.version = "3.8 Size-Only"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
         self.headers = {}
 
         # --- 核心路径修复逻辑 ---
-        # 强制依赖 $HOME 环境变量，这是远程环境中唯一可靠的起点
         home_dir = os.environ.get('HOME')
         self.script_dir = home_dir if home_dir else os.path.expanduser('~')
         self.data_dir = os.path.join(self.script_dir, "emby_scanner_data")
@@ -55,12 +55,12 @@ class EmbyScannerPro:
         banner = f"""
 {Colors.CYAN}╔════════════════════════════════════════════════════════════════╗
 ║             Emby媒体库重复检测工具 {Colors.YELLOW}v{self.version}{Colors.CYAN}              
-║             {Colors.RESET}Zero-Dependency | Size-Only Mode | Color UI{Colors.CYAN}             
+║             {Colors.RESET}Zero-Dependency | Size-Only Mode | Stats{Colors.CYAN}                
 ╚════════════════════════════════════════════════════════════════╝{Colors.RESET}
         """
         print(banner)
 
-    # --- 输入处理 (依赖 Shell TTY) ---
+    # --- 输入处理 ---
     def get_user_input(self, prompt, default=""):
         full_prompt = f"{Colors.BOLD}{prompt}{Colors.RESET} [{default}]: " if default else f"{Colors.BOLD}{prompt}{Colors.RESET}: "
         try:
@@ -74,9 +74,8 @@ class EmbyScannerPro:
     def pause(self):
         self.get_user_input(f"\n按 {Colors.GREEN}回车键{Colors.RESET} 继续...")
 
-    # --- 网络请求 (Zero Dependency) ---
+    # --- 网络请求 ---
     def _request(self, endpoint, params=None):
-        """使用原生urllib发送请求，无需requests库"""
         url = f"{self.server_url}{endpoint}"
         if params:
             query_string = urllib.parse.urlencode(params)
@@ -96,10 +95,8 @@ class EmbyScannerPro:
     # --- 配置管理 ---
     def init_config(self):
         if not os.path.exists(self.data_dir):
-            try:
-                os.makedirs(self.data_dir, exist_ok=True)
-            except:
-                pass
+            try: os.makedirs(self.data_dir, exist_ok=True)
+            except: pass
         
         config_file = os.path.join(self.data_dir, 'emby_config.json')
         if os.path.exists(config_file):
@@ -111,11 +108,10 @@ class EmbyScannerPro:
                     self.headers = {
                         'X-Emby-Token': self.api_key,
                         'Content-Type': 'application/json',
-                        'User-Agent': 'EmbyScannerPro/3.7'
+                        'User-Agent': 'EmbyScannerPro/3.8'
                     }
                     return True
-            except:
-                pass
+            except: pass
         return False
 
     def save_config(self):
@@ -135,7 +131,6 @@ class EmbyScannerPro:
         self.clear_screen()
         self.print_banner()
         print(f"{Colors.YELLOW}首次设置向导{Colors.RESET}\n")
-        
         while True:
             url = self.get_user_input("请输入 Emby 服务器地址 (例如 http://localhost:8096)").strip().rstrip('/')
             if not url.startswith(('http://', 'https://')):
@@ -143,10 +138,8 @@ class EmbyScannerPro:
                 continue
             self.server_url = url
             break
-
         self.api_key = self.get_user_input("请输入 API 密钥").strip()
         self.headers = {'X-Emby-Token': self.api_key}
-
         print("\n🔗 测试连接...")
         info = self._request("/emby/System/Info")
         if info:
@@ -159,9 +152,9 @@ class EmbyScannerPro:
             self.pause()
             return False
 
-    # --- 扫描核心逻辑 (v3.7 纯体积去重) ---
+    # --- 扫描核心逻辑 ---
     def format_size(self, size_bytes):
-        if not size_bytes: return "N/A"
+        if not size_bytes: return "0 B"
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
             if size_bytes < 1024: return f"{size_bytes:.2f} {unit}"
             size_bytes /= 1024
@@ -171,19 +164,13 @@ class EmbyScannerPro:
         """提取增强的视频信息"""
         media_sources = item.get('MediaSources', [])
         if not media_sources: return "未知格式"
-        
         info = []
         stream = media_sources[0]
-        
-        # 容器格式
         container = stream.get('Container', '').upper()
         if container: info.append(container)
-        
-        # 视频流信息
         video_streams = [s for s in stream.get('MediaStreams', []) if s.get('Type') == 'Video']
         if video_streams:
             v = video_streams[0]
-            # 分辨率
             width = v.get('Width')
             if width:
                 if width >= 3800: res = "4K"
@@ -191,10 +178,8 @@ class EmbyScannerPro:
                 elif width >= 1200: res = "720P"
                 else: res = "SD"
                 info.append(f"{Colors.CYAN}{res}{Colors.RESET}")
-            # 编码
             codec = v.get('Codec', '').upper()
             if codec: info.append(codec)
-            
         return " | ".join(info)
 
     def run_scanner(self):
@@ -210,7 +195,7 @@ class EmbyScannerPro:
         print(f"✅ 发现 {len(target_libs)} 个影视库，开始【纯体积】深度查重...\n")
 
         report = [
-            "🎬 Emby 媒体库重复检测报告 (v3.7 Size-Only)",
+            "🎬 Emby 媒体库重复检测报告 (v3.8 Size-Only)",
             "=" * 60,
             f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             f"检测逻辑: 仅基于文件体积 (Size) 匹配，忽略文件名和 TMDB ID",
@@ -223,33 +208,33 @@ class EmbyScannerPro:
         for lib in target_libs:
             lib_name = lib.get('Name')
             lib_type = "Series" if lib.get('CollectionType') == 'tvshows' else "Movie"
-            print(f"📂 正在扫描: {Colors.BOLD}{lib_name}{Colors.RESET} ({lib_type})...")
-
-            # 获取所有项目
+            
+            # 获取项目 (Limit 提升到 10万 以确保统计大库容量准确)
             params = {
                 'ParentId': lib['Id'],
                 'Recursive': 'true',
                 'IncludeItemTypes': lib_type,
                 'Fields': 'Path,ProviderIds,MediaSources,Size,ProductionYear', 
-                'Limit': 20000 
+                'Limit': 100000 
             }
             
             data = self._request("/emby/Items", params)
             if not data: continue
             items = data.get('Items', [])
 
-            # --- 分组逻辑：纯体积 (Size) ---
-            size_groups = defaultdict(list)
+            # --- 1. 统计库总容量 ---
+            total_lib_bytes = sum(item.get('Size', 0) for item in items)
+            lib_size_str = self.format_size(total_lib_bytes)
+            
+            # 实时显示库占用信息
+            print(f"📂 正在扫描: {Colors.BOLD}{lib_name}{Colors.RESET} ({lib_type}) | 库占用: {Colors.CYAN}{lib_size_str}{Colors.RESET}")
 
+            # --- 2. 分组逻辑：纯体积 (Size) ---
+            size_groups = defaultdict(list)
             for item in items:
-                # 核心修改：忽略 TMDB ID，只看 Size
                 item_size = item.get('Size')
+                if not item_size or item_size == 0: continue
                 
-                # 忽略无体积信息的项目或文件夹
-                if not item_size or item_size == 0:
-                    continue
-                
-                # 构造对象
                 obj = {
                     'name': item.get('Name'),
                     'path': item.get('Path'),
@@ -257,19 +242,18 @@ class EmbyScannerPro:
                     'info': self.get_video_info(item),
                     'year': item.get('ProductionYear')
                 }
-                
-                # 以体积为 Key 进行分组
                 size_groups[item_size].append(obj)
 
-            # --- 筛选重复 (数量 > 1) ---
+            # --- 3. 筛选重复 (数量 > 1) ---
             duplicate_groups = {k: v for k, v in size_groups.items() if len(v) > 1}
             
             if duplicate_groups:
-                report.append(f"📁 媒体库: {lib_name}")
+                # 在报告头中增加容量信息
+                report.append(f"📁 媒体库: {lib_name} | 库占用: {lib_size_str}")
                 report.append(f"🔴 发现 {len(duplicate_groups)} 组体积完全一致的文件:")
                 
                 for size, group in duplicate_groups.items():
-                    # 再次确认路径不同，防止同一个文件被扫多次
+                    # 二次确认路径不同
                     paths = set(g['path'] for g in group)
                     if len(paths) > 1:
                         total_dups_groups += 1
@@ -278,7 +262,7 @@ class EmbyScannerPro:
                         size_str = self.format_size(size)
                         report.append(f"  📦 体积: {size_str} (共 {len(group)} 个文件)")
                         
-                        # 在控制台打印进度
+                        # 控制台打印进度
                         print(f"   ❌ 发现重复: {size_str} -> {group[0]['name']} 等 {len(group)} 个")
 
                         for g in group:
@@ -350,19 +334,15 @@ class EmbyScannerPro:
             print("暂无报告。")
             self.pause()
             return
-
         files = [f for f in os.listdir(self.data_dir) if f.endswith('.txt')]
         files.sort(reverse=True)
-        
         if not files:
             print("暂无报告。")
             self.pause()
             return
-
         print(f"{Colors.YELLOW}📜 历史报告列表:{Colors.RESET}")
         for i, f in enumerate(files[:10]):
             print(f"{i+1}. {f}")
-        
         choice = self.get_user_input("\n输入序号查看 (0返回)").strip()
         if choice.isdigit() and 0 < int(choice) <= len(files):
             file_path = os.path.join(self.data_dir, files[int(choice)-1])
@@ -387,7 +367,6 @@ if __name__ == "__main__":
     try:
         app = EmbyScannerPro()
         app.init_config()
-        # 如果未配置，自动进入向导
         if not app.server_url:
             app.setup_wizard()
         app.main_menu()
