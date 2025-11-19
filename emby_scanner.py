@@ -45,22 +45,26 @@ class EmbyScannerPro:
     def clear_screen(self):
         os.system('cls' if os.name == 'nt' else 'clear')
 
-    def print_banner(self):
+def print_banner(self):
         """
         高度还原 HQ 头像的 ASCII Art (v3.3 Final Design - 强调风格和识别度)
         """
         logo = f"""
-{Colors.RED}       ██████████████████████████{Colors.RESET}
-{Colors.RED}     ██{Colors.WHITE}█{Colors.RED}             {Colors.WHITE}█{Colors.RED}██{Colors.RESET}
-{Colors.RED}    ██ {Colors.WHITE}██{Colors.RED}█ {Colors.WHITE}███████{Colors.RED}██{Colors.WHITE} █{Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}
-{Colors.RED}   █  {Colors.WHITE}█{Colors.RED}███{Colors.WHITE}█{Colors.RED}█{Colors.WHITE} █{Colors.RED}███{Colors.WHITE}█{Colors.RED}█{Colors.WHITE} █{Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}    {Colors.YELLOW}Emby Duplicate Scanner{Colors.RESET}
-{Colors.RED}  █   {Colors.WHITE}█{Colors.RED}███{Colors.WHITE}█{Colors.RED}█{Colors.WHITE} █{Colors.RED}███{Colors.WHITE}█{Colors.RED}█{Colors.WHITE} █{Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}    {Colors.CYAN}v{self.version}{Colors.RESET}
-{Colors.RED} █    {Colors.WHITE}▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ {Colors.RED}█{Colors.YELLOW}▄▄▄▄▄{Colors.RESET}
-{Colors.RED}██     {Colors.YELLOW}███████████████████{Colors.RED}██{Colors.RESET}   {Colors.MAGENTA}[ Mode: Size-Only ]{Colors.RESET}
-{Colors.WHITE}██        ●             ●       ██{Colors.RESET}
-{Colors.WHITE}█                       █{Colors.RESET}
-{Colors.WHITE}█           ▀           █{Colors.RESET}
-{Colors.WHITE} █▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█{Colors.RESET}
+{Colors.RED}        ╔═══════════════════════╗{Colors.RESET}
+{Colors.RED}      ╔═╝{Colors.WHITE}░░{Colors.RED}╚═══════════════╝{Colors.WHITE}░░{Colors.RED}╚═╗{Colors.RESET}
+{Colors.RED}     ║{Colors.WHITE}░░░{Colors.RED}║{Colors.WHITE}                 {Colors.RED}║{Colors.WHITE}░░░{Colors.RED}║{Colors.RESET}
+{Colors.RED}    ║{Colors.WHITE}░░{Colors.RED}║  ║{Colors.BOLD}{Colors.WHITE}██  ██  ███{Colors.RESET}{Colors.RED}║  ║{Colors.WHITE}░░{Colors.RED}║{Colors.YELLOW}═══╗{Colors.RESET}
+{Colors.RED}   ║{Colors.WHITE}░{Colors.RED}║   ║{Colors.BOLD}{Colors.WHITE}██  ██ ██ ██{Colors.RESET}{Colors.RED}║   ║{Colors.WHITE}░{Colors.RED}║{Colors.YELLOW}═══║{Colors.RESET}   {Colors.YELLOW}Emby Duplicate Scanner{Colors.RESET}
+{Colors.RED}  ║{Colors.WHITE}░{Colors.RED}║    ║{Colors.BOLD}{Colors.WHITE}████████ ███{Colors.RESET}{Colors.RED}║    ║{Colors.WHITE}░{Colors.RED}║{Colors.YELLOW}═══║{Colors.RESET}   {Colors.CYAN}v{self.version}{Colors.RESET}
+{Colors.RED} ║{Colors.WHITE}░{Colors.RED}║     ╚═══════════════╝     ║{Colors.WHITE}░{Colors.RED}║{Colors.YELLOW}═══║{Colors.RESET}
+{Colors.RED}║{Colors.WHITE}░{Colors.RED}║       {Colors.YELLOW}▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓{Colors.RESET}       {Colors.RED}║{Colors.WHITE}░{Colors.RED}║{Colors.YELLOW}══╝{Colors.RESET}
+{Colors.RED}║{Colors.WHITE}░{Colors.RED}╚════════════════════════════╝{Colors.WHITE}░{Colors.RED}║{Colors.RESET}   {Colors.MAGENTA}[ Mode: Size-Only ]{Colors.RESET}
+{Colors.WHITE}╠════════════════════════════════╣{Colors.RESET}
+{Colors.WHITE}║       ●●●          ●●●       ║{Colors.RESET}
+{Colors.WHITE}║                              ║{Colors.RESET}
+{Colors.WHITE}║            ▂▂▂▂▂             ║{Colors.RESET}
+{Colors.WHITE}║          ▐       ▌           ║{Colors.RESET}
+{Colors.WHITE}╚══════════════════════════════╝{Colors.RESET}
 """
         print(logo)
 
