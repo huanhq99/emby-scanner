@@ -20,7 +20,7 @@
 
 ```
 # 确保在 Bash 或兼容的 Shell (如 Zsh) 中运行
-python3 -u <(curl -sL [https://raw.githubusercontent.com/huanhq99/emby-scanner/main/emby_scanner.py](https://raw.githubusercontent.com/huanhq99/emby-scanner/main/emby_scanner.py))
+python3 -u <(curl -sL https://raw.githubusercontent.com/huanhq99/emby-scanner/main/emby_scanner.py)
 
 ```
 
