@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v3.8 Size-Only Edition
+Emby媒体库重复检测工具 v4.0 Clean-UI Edition
 GitHub: https://github.com/huanhq99/emby-scanner
-核心功能: 
-1. 逻辑：纯体积(Size)去重，忽略 TMDB ID
-2. 新增：媒体库容量统计 (Total Library Size)
-3. 架构：Zero-Dependency (原生 urllib)
+核心升级: 
+1. UI交互重构：扫描过程仅显示进度和关键统计(总容量/重复占用)，不再刷屏详细列表
+2. 逻辑：纯体积(Size)去重，智能识别剧集/电影容量
 """
 
 import os
@@ -33,7 +32,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "3.8 Size-Only"
+        self.version = "4.0 Clean-UI"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -49,13 +48,10 @@ class EmbyScannerPro:
         os.system('cls' if os.name == 'nt' else 'clear')
 
     def print_banner(self):
-        """
-        回归 v3.0 经典简洁方框 Banner
-        """
         banner = f"""
 {Colors.CYAN}╔════════════════════════════════════════════════════════════════╗
 ║             Emby媒体库重复检测工具 {Colors.YELLOW}v{self.version}{Colors.CYAN}              
-║             {Colors.RESET}Zero-Dependency | Size-Only Mode | Stats{Colors.CYAN}                
+║             {Colors.RESET}Zero-Dependency | Minimalist UI | Smart Stats{Colors.CYAN}            
 ╚════════════════════════════════════════════════════════════════╝{Colors.RESET}
         """
         print(banner)
@@ -108,7 +104,7 @@ class EmbyScannerPro:
                     self.headers = {
                         'X-Emby-Token': self.api_key,
                         'Content-Type': 'application/json',
-                        'User-Agent': 'EmbyScannerPro/3.8'
+                        'User-Agent': 'EmbyScannerPro/4.0'
                     }
                     return True
             except: pass
@@ -152,7 +148,7 @@ class EmbyScannerPro:
             self.pause()
             return False
 
-    # --- 扫描核心逻辑 ---
+    # --- 扫描核心逻辑 (v4.0 Clean UI) ---
     def format_size(self, size_bytes):
         if not size_bytes: return "0 B"
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -177,7 +173,7 @@ class EmbyScannerPro:
                 elif width >= 1900: res = "1080P"
                 elif width >= 1200: res = "720P"
                 else: res = "SD"
-                info.append(f"{Colors.CYAN}{res}{Colors.RESET}")
+                info.append(f"{res}") # 报告中不需要颜色代码，影响阅读
             codec = v.get('Codec', '').upper()
             if codec: info.append(codec)
         return " | ".join(info)
@@ -185,58 +181,80 @@ class EmbyScannerPro:
     def run_scanner(self):
         self.clear_screen()
         self.print_banner()
-        print(f"{Colors.YELLOW}🚀 正在获取媒体库...{Colors.RESET}")
+        print(f"{Colors.YELLOW}🚀 正在连接服务器获取媒体库...{Colors.RESET}")
         
         libs = self._request("/emby/Library/MediaFolders")
         if not libs: return
 
         # 筛选库
         target_libs = [l for l in libs.get('Items', []) if l.get('CollectionType') in ['movies', 'tvshows']]
-        print(f"✅ 发现 {len(target_libs)} 个影视库，开始【纯体积】深度查重...\n")
+        print(f"✅ 发现 {len(target_libs)} 个影视库，开始后台深度扫描...\n")
+        print(f"{Colors.BOLD}{'媒体库名称':<20} | {'总容量':<12} | {'冗余占用 (可释放)':<15} | {'状态'}{Colors.RESET}")
+        print("-" * 70)
 
         report = [
-            "🎬 Emby 媒体库重复检测报告 (v3.8 Size-Only)",
+            "🎬 Emby 媒体库重复检测报告 (v4.0 Clean-UI)",
             "=" * 60,
-            f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"检测逻辑: 仅基于文件体积 (Size) 匹配，忽略文件名和 TMDB ID",
             ""
         ]
 
-        total_dups_groups = 0
-        total_dups_files = 0
+        total_scan_dups_groups = 0
+        total_scan_redundant_bytes = 0
 
         for lib in target_libs:
             lib_name = lib.get('Name')
-            lib_type = "Series" if lib.get('CollectionType') == 'tvshows' else "Movie"
+            collection_type = lib.get('CollectionType')
             
-            # 获取项目 (Limit 提升到 10万 以确保统计大库容量准确)
+            # 提示正在扫描，使用 \r 回车符实现简单的行刷新效果，或者直接打印
+            sys.stdout.write(f"⏳ 正在扫描: {lib_name}...\r")
+            sys.stdout.flush()
+            
+            # 确定扫描类型
+            if collection_type == 'tvshows':
+                fetch_type = 'Episode'
+            else:
+                fetch_type = 'Movie'
+            
+            # 获取数据
             params = {
                 'ParentId': lib['Id'],
                 'Recursive': 'true',
-                'IncludeItemTypes': lib_type,
-                'Fields': 'Path,ProviderIds,MediaSources,Size,ProductionYear', 
+                'IncludeItemTypes': fetch_type, 
+                'Fields': 'Path,MediaSources,Size,ProductionYear,SeriesName,IndexNumber,ParentIndexNumber', 
                 'Limit': 100000 
             }
             
             data = self._request("/emby/Items", params)
-            if not data: continue
+            if not data: 
+                print(f"❌ {lib_name:<18} | error        | error           | 扫描失败")
+                continue
+                
             items = data.get('Items', [])
 
             # --- 1. 统计库总容量 ---
             total_lib_bytes = sum(item.get('Size', 0) for item in items)
-            lib_size_str = self.format_size(total_lib_bytes)
             
-            # 实时显示库占用信息
-            print(f"📂 正在扫描: {Colors.BOLD}{lib_name}{Colors.RESET} ({lib_type}) | 库占用: {Colors.CYAN}{lib_size_str}{Colors.RESET}")
-
             # --- 2. 分组逻辑：纯体积 (Size) ---
             size_groups = defaultdict(list)
             for item in items:
                 item_size = item.get('Size')
                 if not item_size or item_size == 0: continue
                 
+                # 构造显示名称
+                name = item.get('Name')
+                if collection_type == 'tvshows':
+                    series_name = item.get('SeriesName', '')
+                    season = item.get('ParentIndexNumber')
+                    episode = item.get('IndexNumber')
+                    if season is not None and episode is not None:
+                        name = f"{series_name} S{season:02d}E{episode:02d} - {name}"
+                    elif series_name:
+                         name = f"{series_name} - {name}"
+
                 obj = {
-                    'name': item.get('Name'),
+                    'name': name,
                     'path': item.get('Path'),
                     'size': item_size,
                     'info': self.get_video_info(item),
@@ -244,44 +262,72 @@ class EmbyScannerPro:
                 }
                 size_groups[item_size].append(obj)
 
-            # --- 3. 筛选重复 (数量 > 1) ---
+            # --- 3. 筛选重复并计算冗余 ---
             duplicate_groups = {k: v for k, v in size_groups.items() if len(v) > 1}
             
+            lib_redundant_bytes = 0
+            lib_dup_groups_count = 0
+
             if duplicate_groups:
-                # 在报告头中增加容量信息
-                report.append(f"📁 媒体库: {lib_name} | 库占用: {lib_size_str}")
-                report.append(f"🔴 发现 {len(duplicate_groups)} 组体积完全一致的文件:")
+                # 报告写入
+                report.append(f"📁 媒体库: {lib_name} | 库占用: {self.format_size(total_lib_bytes)}")
+                report.append(f"🔴 发现 {len(duplicate_groups)} 组重复:")
                 
                 for size, group in duplicate_groups.items():
-                    # 二次确认路径不同
                     paths = set(g['path'] for g in group)
                     if len(paths) > 1:
-                        total_dups_groups += 1
-                        total_dups_files += (len(group) - 1)
+                        count = len(group)
+                        # 冗余大小 = (文件数 - 1) * 单个文件大小
+                        # 意思是有多少空间是被重复文件浪费的
+                        wasted = (count - 1) * size
+                        lib_redundant_bytes += wasted
+                        lib_dup_groups_count += 1
                         
                         size_str = self.format_size(size)
-                        report.append(f"  📦 体积: {size_str} (共 {len(group)} 个文件)")
+                        report.append(f"  📦 单文件体积: {size_str} | 冗余: {count-1} 份 (共 {count} 个文件)")
                         
-                        # 控制台打印进度
-                        print(f"   ❌ 发现重复: {size_str} -> {group[0]['name']} 等 {len(group)} 个")
-
                         for g in group:
-                            report.append(f"    - {g['name']} ({g['year']}) [{g['info']}]")
+                            year_str = f" ({g['year']})" if g['year'] else ""
+                            report.append(f"    - {g['name']}{year_str} [{g['info']}]")
                             report.append(f"      路径: {g['path']}")
                         report.append("")
-                report.append("-" * 40)
+                
+                if lib_dup_groups_count == 0:
+                     report.append("   (路径完全相同，已忽略)")
+                     report.append("")
+                else:
+                     report.append("-" * 40)
+            
+            # 全局统计累加
+            total_scan_dups_groups += lib_dup_groups_count
+            total_scan_redundant_bytes += lib_redundant_bytes
+
+            # --- 4. UI 输出 (清除行内进度，打印最终结果) ---
+            # 格式化输出
+            cap_str = self.format_size(total_lib_bytes)
+            
+            if lib_redundant_bytes > 0:
+                dup_str = f"{Colors.RED}{self.format_size(lib_redundant_bytes)}{Colors.RESET}"
+                status = f"{Colors.YELLOW}含重复{Colors.RESET}"
             else:
-                print(f"   ✅ 该库未发现体积重复。")
+                dup_str = f"{Colors.GREEN}0 B{Colors.RESET}"
+                status = f"{Colors.GREEN}完美{Colors.RESET}"
+
+            # 覆盖之前的“正在扫描”行 (使用空格填充以确保覆盖)
+            sys.stdout.write(f"\r{Colors.BOLD}{lib_name:<20}{Colors.RESET} | {cap_str:<12} | {dup_str:<24} | {status:<10}\n")
+            sys.stdout.flush()
 
         # --- 结尾 ---
+        print("-" * 70)
         report.append("=" * 60)
-        if total_dups_groups == 0:
-            report.append("🎉 完美！未发现任何体积重复的文件。")
-            print(f"\n{Colors.GREEN}🎉 未发现体积重复文件！{Colors.RESET}")
+        
+        summary = f"扫描结束。共发现 {total_scan_dups_groups} 组重复，总计浪费空间: {self.format_size(total_scan_redundant_bytes)}"
+        report.append(summary)
+        
+        if total_scan_dups_groups == 0:
+            print(f"\n{Colors.GREEN}🎉 完美！所有媒体库均未发现体积重复文件。{Colors.RESET}")
         else:
-            summary = f"共发现 {total_dups_groups} 组重复，涉及 {total_dups_files} 个冗余文件。"
-            report.append(summary)
-            print(f"\n{Colors.RED}🚨 {summary}{Colors.RESET}")
+            print(f"\n{Colors.RED}🚨 扫描结束。发现可释放空间: {self.format_size(total_scan_redundant_bytes)}{Colors.RESET}")
 
         # 保存报告
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -289,7 +335,7 @@ class EmbyScannerPro:
         try:
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(report))
-            print(f"📄 报告已生成: {Colors.BOLD}{report_path}{Colors.RESET}")
+            print(f"📄 详细清单已生成: {Colors.BOLD}{report_path}{Colors.RESET}")
         except Exception as e:
             print(f"❌ 报告保存失败: {e}")
         
@@ -367,6 +413,7 @@ if __name__ == "__main__":
     try:
         app = EmbyScannerPro()
         app.init_config()
+        # 如果未配置，自动进入向导
         if not app.server_url:
             app.setup_wizard()
         app.main_menu()
