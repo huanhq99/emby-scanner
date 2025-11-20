@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.1 Ultimate Edition
+Emby媒体库重复检测工具 v2.2 Ultimate Edition
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
-1. 逻辑：纯体积(Size)去重 + 智能保留 + 用户登录深度删除。
-2. 新增：剧集缺集检查 (Missing Episodes Check)。
+1. 逻辑：纯体积(Size)去重 + 智能保留(文件名最长) + 用户登录深度删除。
+2. 交互：支持【批量自动标记】删除短文件名副本，显示完整路径。
 3. 安全：ID熔断保护。
-4. 架构：Zero-Dependency / Dashboard UI
+4. 架构：Zero-Dependency
 """
 
 import os
@@ -37,7 +37,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.1 Ultimate"
+        self.version = "2.2 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -68,7 +68,7 @@ class EmbyScannerPro:
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
         
-        info_bar = f"{Colors.BOLD}   Emby Duplicate Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Duplicate & Missing {Colors.DIM}|{Colors.RESET} ID-Safe"
+        info_bar = f"{Colors.BOLD}   Emby Duplicate Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Batch Clean {Colors.DIM}|{Colors.RESET} User-Login"
         
         print(logo)
         print(info_bar.center(80))
@@ -324,7 +324,6 @@ class EmbyScannerPro:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_path = os.path.join(self.data_dir, f"report_{timestamp}.txt")
         
-        # 简单构建报告内容（复用原来的逻辑，简化代码展示）
         try:
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write(f"Emby 重复检测报告 - {timestamp}\n\n")
@@ -358,47 +357,78 @@ class EmbyScannerPro:
         self.clear_screen()
         print(f"{Colors.CYAN}>>> 正在处理: {target_lib}{Colors.RESET}")
         
+        # --- v2.2 核心交互升级 ---
+        print(f" {Colors.BOLD}请选择处理模式:{Colors.RESET}")
+        print(f"   {Colors.GREEN}[a] 批量自动模式{Colors.RESET} (保留 #1 长命名文件，自动删除其他)")
+        print(f"   {Colors.YELLOW}[m] 手动逐个确认{Colors.RESET} (逐一查看每组详情)")
+        
+        mode = self.get_user_input("输入 a 或 m").strip().lower()
+        
         final_delete_tasks = []
         
-        for idx, group in enumerate(groups):
-            files = group['files']
-            files = sorted(files, key=lambda x: len(os.path.basename(x['path'])), reverse=True)
-            
-            print(f"\n{Colors.YELLOW}--- [第 {idx+1}/{len(groups)} 组] 体积: {self.format_size(group['size'])} ---{Colors.RESET}")
-            
-            all_ids = [f['id'] for f in files]
-            is_merged = len(set(all_ids)) == 1
+        if mode == 'a':
+            print(f"\n {Colors.YELLOW}🔄 正在自动匹配最佳文件...{Colors.RESET}")
+            for group in groups:
+                files = group['files']
+                # 排序：文件名最长 -> 放在 #1
+                files = sorted(files, key=lambda x: len(os.path.basename(x['path'])), reverse=True)
+                
+                # #1 保留， #2... 删除
+                keep_file = files[0]
+                del_files = files[1:]
+                
+                # 简单的 ID 冲突检查
+                is_safe = True
+                for f in del_files:
+                    if f['id'] == keep_file['id']: is_safe = False
+                
+                if is_safe:
+                    final_delete_tasks.extend(del_files)
+                else:
+                    print(f" {Colors.RED}⚠️ 跳过一组 ID 冲突 (合并条目){Colors.RESET}")
 
-            for i, f in enumerate(files):
-                fname = os.path.basename(f['path'])
-                print(f"  [{Colors.CYAN}{i+1}{Colors.RESET}] {f['name']} [{f['info']}]")
-                print(f"      {Colors.DIM}{fname}{Colors.RESET} (ID: {f['id']})")
+        else:
+            # 手动模式
+            for idx, group in enumerate(groups):
+                files = group['files']
+                # 排序：文件名最长 -> #1
+                files = sorted(files, key=lambda x: len(os.path.basename(x['path'])), reverse=True)
+                
+                print(f"\n{Colors.YELLOW}--- [第 {idx+1}/{len(groups)} 组] 体积: {self.format_size(group['size'])} ---{Colors.RESET}")
+                
+                all_ids = [f['id'] for f in files]
+                is_merged = len(set(all_ids)) == 1
+
+                for i, f in enumerate(files):
+                    # --- UI 优化：显示完整路径 ---
+                    print(f"  [{Colors.CYAN}{i+1}{Colors.RESET}] {f['name']} [{f['info']}]")
+                    print(f"      {Colors.DIM}{f['path']}{Colors.RESET}") # 显示完整路径
             
-            if is_merged:
-                 print(f"  {Colors.RED}⚠️  警告: ID 冲突 (已合并条目)。请谨慎操作。{Colors.RESET}")
+                if is_merged:
+                     print(f"  {Colors.RED}⚠️  警告: ID 冲突 (已合并条目)。请谨慎操作。{Colors.RESET}")
             
-            user_sel = self.get_user_input(f"删除序号 (多选逗号隔开, Enter跳过)").strip()
-            
-            if user_sel:
-                try:
-                    indices = [int(x.strip()) - 1 for x in user_sel.split(',') if x.strip().isdigit()]
-                    selected_files = []
-                    for sel_idx in indices:
-                        if 0 <= sel_idx < len(files):
-                            selected_files.append(files[sel_idx])
-                    
-                    if is_merged and len(selected_files) < len(files):
-                         print(f"  {Colors.RED}🚫 阻止操作：检测到合并条目，无法单独删除。{Colors.RESET}")
-                         continue
-                    
-                    for f in selected_files:
-                        rem_ids = [x['id'] for x in files if x not in selected_files and x != f]
-                        if f['id'] in rem_ids:
-                             print(f"  {Colors.RED}🚫 跳过：ID 冲突保护。{Colors.RESET}")
-                        else:
-                             final_delete_tasks.append(f)
-                             print(f"      ✅ 已标记")
-                except: pass
+                user_sel = self.get_user_input(f"删除序号 (多选逗号隔开, Enter跳过)").strip()
+                
+                if user_sel:
+                    try:
+                        indices = [int(x.strip()) - 1 for x in user_sel.split(',') if x.strip().isdigit()]
+                        selected_files = []
+                        for sel_idx in indices:
+                            if 0 <= sel_idx < len(files):
+                                selected_files.append(files[sel_idx])
+                        
+                        if is_merged and len(selected_files) < len(files):
+                             print(f"  {Colors.RED}🚫 阻止操作：检测到合并条目，无法单独删除。{Colors.RESET}")
+                             continue
+                        
+                        for f in selected_files:
+                            rem_ids = [x['id'] for x in files if x not in selected_files and x != f]
+                            if f['id'] in rem_ids:
+                                 print(f"  {Colors.RED}🚫 跳过：ID 冲突保护。{Colors.RESET}")
+                            else:
+                                 final_delete_tasks.append(f)
+                                 print(f"      ✅ 已标记")
+                    except: pass
 
         if not final_delete_tasks:
             print("\n 无文件被选中。")
@@ -428,7 +458,7 @@ class EmbyScannerPro:
             print(f"\n {Colors.GREEN}✅ 完成！成功删除 {success} 个。{Colors.RESET}")
             self.pause()
 
-    # --- 新增功能：缺集检查 (Non-Intrusive) ---
+    # --- 新增功能：缺集检查 ---
     def run_missing_check(self):
         self.clear_screen()
         self.print_banner()
@@ -437,7 +467,6 @@ class EmbyScannerPro:
         libs = self._request("/emby/Library/MediaFolders")
         if not libs: return
 
-        # 只检查 TV Shows
         target_libs = [l for l in libs.get('Items', []) if l.get('CollectionType') == 'tvshows']
         
         if not target_libs:
@@ -464,7 +493,6 @@ class EmbyScannerPro:
             sys.stdout.write(f" │ {lib_name:<20} ...\r")
             sys.stdout.flush()
             
-            # 1. 获取该库下所有 Series
             params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Series', 'Limit': 100000}
             series_data = self._request("/emby/Items", params)
             if not series_data: continue
@@ -474,7 +502,6 @@ class EmbyScannerPro:
             lib_missing_count = 0
             lib_report_buffer = []
 
-            # 2. 遍历每个 Series 获取 Episodes
             for series in all_series:
                 ep_params = {
                     'ParentId': series['Id'], 
@@ -497,15 +524,12 @@ class EmbyScannerPro:
                 series_has_missing = False
                 series_missing_str = []
 
-                # 3. 计算缺集
                 for s_idx in sorted(season_map.keys()):
-                    if s_idx == 0: continue # 跳过特典/特别篇
+                    if s_idx == 0: continue 
                     
                     eps = sorted(set(season_map[s_idx]))
                     if not eps: continue
                     
-                    # 逻辑：从第1集到当前最大集数之间，缺了哪些
-                    # 例如有 [1, 2, 5]，Max=5，缺失 [3, 4]
                     max_ep = eps[-1]
                     expected = set(range(1, max_ep + 1))
                     current = set(eps)
@@ -514,7 +538,6 @@ class EmbyScannerPro:
                     if missing:
                         series_has_missing = True
                         lib_missing_count += len(missing)
-                        # 格式化显示
                         miss_list_str = ", ".join(map(str, missing))
                         series_missing_str.append(f"  - 第 {s_idx} 季: 缺失集数 [{miss_list_str}]")
 
@@ -530,7 +553,6 @@ class EmbyScannerPro:
             
             total_missing_count += lib_missing_count
             
-            # UI 输出
             status = f"{Colors.YELLOW}有缺集{Colors.RESET}" if lib_missing_count > 0 else f"{Colors.GREEN}完整{Colors.RESET}"
             missing_str = f"{Colors.RED}{lib_missing_count} 集{Colors.RESET}" if lib_missing_count > 0 else "0"
             
@@ -539,9 +561,8 @@ class EmbyScannerPro:
 
         print(f" {Colors.DIM}└" + "─"*22 + "┴" + "─"*14 + "┴" + "─"*17 + "┴" + "─"*12 + "┘" + f"{Colors.RESET}")
         
-        # 生成报告
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_name = f"missing_report_{timestamp}.txt" # 独立的报告命名
+        report_name = f"missing_report_{timestamp}.txt"
         report_path = os.path.join(self.data_dir, report_name)
         
         try:
@@ -559,7 +580,6 @@ class EmbyScannerPro:
             self.clear_screen()
             self.print_banner()
             
-            # 优化菜单布局
             server_status = f"{Colors.GREEN}● 已连接{Colors.RESET}" if self.server_url else f"{Colors.RED}● 未配置{Colors.RESET}"
             
             print(f" {Colors.DIM}Server Status:{Colors.RESET} {server_status}")
@@ -569,7 +589,7 @@ class EmbyScannerPro:
             print(f" {Colors.CYAN}[2]{Colors.RESET} ⚙️   配置服务器信息")
             print(f" {Colors.CYAN}[3]{Colors.RESET} 📂  查看历史报告")
             print(f" {Colors.CYAN}[4]{Colors.RESET} 🗑️   重置工具数据")
-            print(f" {Colors.MAGENTA}[5]{Colors.RESET} 🔍  缺集检查 (Missing)")  # 新增入口
+            print(f" {Colors.MAGENTA}[5]{Colors.RESET} 🔍  缺集检查 (Missing)")  
             print(f" {Colors.CYAN}[0]{Colors.RESET} 🚪  退出程序")
             print("")
             
@@ -578,7 +598,7 @@ class EmbyScannerPro:
             elif c=='2': self.init_config() if self.setup_wizard() else None
             elif c=='3': self.view_reports()
             elif c=='4': self.reset_config()
-            elif c=='5': self.run_missing_check() if self.server_url else print("请先配置") or self.pause() # 新增逻辑
+            elif c=='5': self.run_missing_check() if self.server_url else print("请先配置") or self.pause()
             elif c=='0': sys.exit(0)
 
     def view_reports(self):
