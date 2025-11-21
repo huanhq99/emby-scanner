@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.8 Ultimate Edition
+Emby媒体库重复检测工具 v2.9 Ultimate Edition (Analytics Fix)
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 基础：纯体积查重 + 智能保留 + 用户登录深度删除 + ID熔断保护。
 2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理。
-3. 升级：扫描上限提升至 100万 + 媒体库透视 Pro (HDR/Remux/Atmos 统计)。
-4. 架构：Zero-Dependency / Dashboard UI
+3. 修复：媒体库透视分析改为【分页循环获取】，彻底解决大库超时崩溃问题。
 """
 
 import os
@@ -37,7 +36,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.8 Ultimate"
+        self.version = "2.9 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -65,7 +64,7 @@ class EmbyScannerPro:
 {Colors.CYAN}                       __/ |                                        {Colors.RESET}
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
-        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Analytics Pro {Colors.DIM}|{Colors.RESET} 1 Million Limit"
+        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Analytics Paging {Colors.DIM}|{Colors.RESET} All-in-One"
         print(logo)
         print(info_bar.center(80))
         print(f"\n{Colors.DIM}" + "—" * 65 + f"{Colors.RESET}\n")
@@ -105,7 +104,7 @@ class EmbyScannerPro:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # 增加超时时间至 300s 以应对百万级数据量
+                # 增加超时时间至 300s
                 with urllib.request.urlopen(req, timeout=300) as response:
                     if response.status == 204: return {}
                     return json.loads(response.read().decode('utf-8'))
@@ -168,7 +167,7 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.8'}
+                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.9'}
                     return True
             except: pass
         return False
@@ -216,10 +215,11 @@ class EmbyScannerPro:
         if video_streams:
             v = video_streams[0]
             width = v.get('Width', 0)
+            height = v.get('Height', 0)
             
-            if width >= 3800: res = "4K"
-            elif width >= 1900: res = "1080P"
-            elif width >= 1200: res = "720P"
+            if width >= 3800 or height >= 2100: res = "4K"
+            elif width >= 1900 or height >= 1000: res = "1080P"
+            elif width >= 1200 or height >= 700: res = "720P"
             else: res = "SD"
             
             if res == "4K": res = f"{Colors.MAGENTA}4K{Colors.RESET}"
@@ -249,7 +249,7 @@ class EmbyScannerPro:
         print(f" {Colors.DIM}├" + "─"*22 + "┼" + "─"*14 + "┼" + "─"*17 + "┼" + "─"*12 + "┤" + f"{Colors.RESET}")
 
         self.last_scan_results = {}
-        lib_summaries = []
+        lib_summaries = [] 
 
         for lib in target_libs:
             lib_name = lib.get('Name')
@@ -261,7 +261,7 @@ class EmbyScannerPro:
             params = {
                 'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': fetch_type,
                 'Fields': 'Path,MediaSources,Size,ProductionYear,SeriesName,IndexNumber,ParentIndexNumber', 
-                'Limit': 1000000 # Limit 提升至 100万
+                'Limit': 1000000 
             }
             
             data = self._request("/emby/Items", params)
@@ -459,7 +459,6 @@ class EmbyScannerPro:
         for lib in target_libs:
             lib_name = lib.get('Name')
             sys.stdout.write(f" │ {lib_name:<20} ...\r"); sys.stdout.flush()
-            # Limit 提升
             params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Series', 'Limit': 1000000}
             series_data = self._request("/emby/Items", params)
             if not series_data: continue
@@ -557,82 +556,106 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
-    # --- 功能 5: 媒体库透视分析 (Analytics Pro) ---
+    # --- 功能 5: 媒体库透视分析 (v2.9 修复: 分页获取防超时) ---
     def run_analytics(self):
         self.clear_screen()
         self.print_banner()
         print(f" {Colors.YELLOW}📊 正在分析媒体库...{Colors.RESET}")
         
-        # Limit 提升至 100万
-        params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'MediaSources,Path', 'Limit': 1000000}
-        data = self._request("/emby/Items", params)
-        if not data: return
-        
         stats = {
             'Resolution': defaultdict(int),
             'VideoCodec': defaultdict(int),
-            'SourceType': defaultdict(int), # Remux, etc.
-            'DynamicRange': defaultdict(int), # HDR, Dolby
-            'AudioTech': defaultdict(int), # Atmos, DTS
+            'SourceType': defaultdict(int),
+            'DynamicRange': defaultdict(int), 
+            'AudioTech': defaultdict(int),
             'TotalCount': 0
         }
         
-        sys.stdout.write(" 🔄 分析中...\r"); sys.stdout.flush()
+        # 1. 获取所有 Items ID (轻量级)
+        init_params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'Id', 'Limit': 1000000}
+        # 注意: 仅获取 ID 可能也会超时，如果库真的巨大。但通常比获取所有 Fields 快。
+        # 如果这里依然超时，就需要完全重构为 Loop Paging。
+        # 下面采用最稳健的 Loop Paging 策略。
+
+        start_index = 0
+        chunk_size = 5000 # 每次取 5000 条，防止超时
+        total_processed = 0
         
-        for item in data.get('Items', []):
-            stats['TotalCount'] += 1
-            sources = item.get('MediaSources', [])
-            if not sources: continue
+        while True:
+            sys.stdout.write(f" 🔄 已分析: {total_processed} ...\r")
+            sys.stdout.flush()
             
-            source = sources[0]
-            path = item.get('Path', '').upper()
-            name = item.get('Name', '').upper()
+            params = {
+                'Recursive': 'true', 
+                'IncludeItemTypes': 'Movie,Episode', 
+                'Fields': 'MediaSources,Path,Name', 
+                'StartIndex': start_index,
+                'Limit': chunk_size
+            }
             
-            # Source Type Analysis
-            if 'REMUX' in path or 'REMUX' in name: stats['SourceType']['Remux'] += 1
-            elif 'BLURAY' in path or 'BLU-RAY' in path: stats['SourceType']['BluRay'] += 1
-            elif 'WEB-DL' in path or 'WEBDL' in path: stats['SourceType']['WEB-DL'] += 1
-            elif 'WEBRIP' in path: stats['SourceType']['WEBRip'] += 1
-            elif 'ISO' in path or path.endswith('.ISO'): stats['SourceType']['ISO'] += 1
-            else: stats['SourceType']['Other'] += 1
+            data = self._request("/emby/Items", params)
+            if not data or not data.get('Items'):
+                break
+                
+            items = data.get('Items')
+            count = len(items)
+            if count == 0: break
             
-            # Video Analysis
-            for stream in source.get('MediaStreams', []):
-                if stream.get('Type') == 'Video':
-                    w = stream.get('Width', 0)
-                    if w >= 3800: res = "4K"
-                    elif w >= 1900: res = "1080P"
-                    elif w >= 1200: res = "720P"
-                    else: res = "SD"
-                    stats['Resolution'][res] += 1
-                    
-                    codec = stream.get('Codec', 'Unknown').upper()
-                    stats['VideoCodec'][codec] += 1
-                    
-                    disp_title = stream.get('DisplayTitle', '').upper()
-                    title = stream.get('Title', '').upper()
-                    video_range = stream.get('VideoRange', '').upper()
-                    is_dv = 'DOLBY VISION' in disp_title or 'DV' in title or 'DOVI' in video_range
-                    is_hdr = 'HDR' in video_range or 'HDR' in disp_title
-                    if is_dv: stats['DynamicRange']['Dolby Vision'] += 1
-                    elif is_hdr: stats['DynamicRange']['HDR10/+'] += 1
-                    else: stats['DynamicRange']['SDR'] += 1
-                    break
-
-            # Audio Analysis
-            audio_streams = [s for s in source.get('MediaStreams', []) if s.get('Type') == 'Audio']
-            found_adv_audio = False
-            for a in audio_streams:
-                title = (a.get('DisplayTitle') or '').upper() + (a.get('Codec') or '').upper() + (a.get('Profile') or '').upper()
-                if 'ATMOS' in title: stats['AudioTech']['Dolby Atmos'] += 1; found_adv_audio = True; break
-                if 'DTS-X' in title or 'DTS:X' in title: stats['AudioTech']['DTS:X'] += 1; found_adv_audio = True; break
-                if 'TRUEHD' in title: stats['AudioTech']['TrueHD'] += 1; found_adv_audio = True; break
-                if 'DTS-HD' in title: stats['AudioTech']['DTS-HD MA'] += 1; found_adv_audio = True; break
-            if not found_adv_audio and audio_streams:
-                codec = audio_streams[0].get('Codec', 'Unknown').upper()
-                stats['AudioTech'][codec] += 1
-
-        print(f"\n {Colors.BOLD}=== 媒体库透视 (共 {stats['TotalCount']} 个视频) ==={Colors.RESET}")
+            total_processed += count
+            start_index += count
+            
+            for item in items:
+                stats['TotalCount'] += 1
+                sources = item.get('MediaSources', [])
+                if not sources: continue
+                
+                source = sources[0]
+                path = item.get('Path', '').upper()
+                name = item.get('Name', '').upper()
+                
+                # Source Type
+                if 'REMUX' in path or 'REMUX' in name: stats['SourceType']['Remux'] += 1
+                elif 'BLURAY' in path or 'BLU-RAY' in path: stats['SourceType']['BluRay'] += 1
+                elif 'WEB-DL' in path or 'WEBDL' in path: stats['SourceType']['WEB-DL'] += 1
+                elif 'WEBRIP' in path: stats['SourceType']['WEBRip'] += 1
+                elif 'ISO' in path or path.endswith('.ISO'): stats['SourceType']['ISO'] += 1
+                else: stats['SourceType']['Other'] += 1
+                
+                # Video
+                for stream in source.get('MediaStreams', []):
+                    if stream.get('Type') == 'Video':
+                        w = stream.get('Width', 0)
+                        h = stream.get('Height', 0)
+                        if w >= 3800 or h >= 2100: res = "4K"
+                        elif w >= 1900 or h >= 1000: res = "1080P"
+                        elif w >= 1200 or h >= 700: res = "720P"
+                        else: res = "SD"
+                        stats['Resolution'][res] += 1
+                        codec = stream.get('Codec', 'Unknown').upper()
+                        stats['VideoCodec'][codec] += 1
+                        
+                        disp = stream.get('DisplayTitle', '').upper()
+                        title = stream.get('Title', '').upper()
+                        vr = stream.get('VideoRange', '').upper()
+                        if 'DOLBY VISION' in disp or 'DV' in title or 'DOVI' in vr: stats['DynamicRange']['Dolby Vision'] += 1
+                        elif 'HDR' in vr or 'HDR' in disp: stats['DynamicRange']['HDR10/+'] += 1
+                        else: stats['DynamicRange']['SDR'] += 1
+                        break
+                
+                # Audio
+                audio_streams = [s for s in source.get('MediaStreams', []) if s.get('Type') == 'Audio']
+                found_adv = False
+                for a in audio_streams:
+                    t = (a.get('DisplayTitle') or '').upper() + (a.get('Codec') or '').upper() + (a.get('Profile') or '').upper()
+                    if 'ATMOS' in t: stats['AudioTech']['Dolby Atmos'] += 1; found_adv = True; break
+                    if 'DTS-X' in t or 'DTS:X' in t: stats['AudioTech']['DTS:X'] += 1; found_adv = True; break
+                    if 'TRUEHD' in t: stats['AudioTech']['TrueHD'] += 1; found_adv = True; break
+                    if 'DTS-HD' in t: stats['AudioTech']['DTS-HD MA'] += 1; found_adv = True; break
+                if not found_adv and audio_streams:
+                    codec = audio_streams[0].get('Codec', 'Unknown').upper()
+                    stats['AudioTech'][codec] += 1
+        
+        print(f"\n\n {Colors.BOLD}=== 媒体库透视 (共 {stats['TotalCount']} 个视频) ==={Colors.RESET}")
         print(f"\n {Colors.CYAN}📺 画质分布:{Colors.RESET}")
         for k, v in sorted(stats['Resolution'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<10}: {v}")
@@ -656,7 +679,7 @@ class EmbyScannerPro:
         print("")
         self.pause()
 
-    # --- 新增功能: 大文件筛选 (>20G) (Limit 100万) ---
+    # --- 新增功能: 大文件筛选 (>20G) ---
     def run_large_file_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -664,8 +687,8 @@ class EmbyScannerPro:
         
         libs = self._request("/emby/Library/MediaFolders")
         if not libs: return
-        target_libs = [l for l in libs.get('Items', []) if l.get('CollectionType') == 'movies']
         
+        target_libs = [l for l in libs.get('Items', []) if l.get('CollectionType') == 'movies']
         large_files = []
         THRESHOLD = 20 * (1024**3) 
         
@@ -712,10 +735,12 @@ class EmbyScannerPro:
             server_status = f"{Colors.GREEN}● 已连接{Colors.RESET}" if self.server_url else f"{Colors.RED}● 未配置{Colors.RESET}"
             print(f" {Colors.DIM}Server Status:{Colors.RESET} {server_status}   {Colors.DIM}Data Path:{Colors.RESET} {self.data_dir}\n")
             
+            # 左列：核心功能
             print(f" {Colors.BOLD}--- 核心维护 ---{Colors.RESET}")
             print(f" {Colors.CYAN}[1]{Colors.RESET} 🚀  重复文件扫描 (Dedupe)")
             print(f" {Colors.MAGENTA}[5]{Colors.RESET} 🔍  剧集缺集检查 (Missing)")
             
+            # 右列/下行：扩展功能
             print(f"\n {Colors.BOLD}--- 扩展工具 ---{Colors.RESET}")
             print(f" {Colors.BLUE}[6]{Colors.RESET} 🧹  垃圾清理 (Empty Folders)")
             print(f" {Colors.BLUE}[7]{Colors.RESET} 📊  媒体库透视 (Analytics)")
