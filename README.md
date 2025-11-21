@@ -17,12 +17,16 @@
 
 ### 方法一：单行命令运行（推荐）
 
-这是最快、最稳定的启动方式。脚本会自动在您的家目录下创建数据文件夹。
-
 ```
 # 适用于所有 Linux 发行版 / macOS
 python3 -u <(curl -sL https://raw.githubusercontent.com/huanhq99/emby-scanner/main/emby_scanner.py)
 ```
+国内用户加速
+```
+# 适用于所有 Linux 发行版 / macOS
+python3 -u <(curl -sL https://ghfast.top/https://raw.githubusercontent.com/huanhq99/emby-scanner/main/emby_scanner.py)
+```
+
 ## 📖 功能菜单
 
 - 🚀 **开始扫描重复**：检测重复文件，显示库容量。提供 自动批量删除 (保留长命名) 和 手动精选 两种模式。
