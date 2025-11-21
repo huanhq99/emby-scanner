@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.6 Ultimate Edition (Final Complete)
+Emby媒体库重复检测工具 v2.6.1 Ultimate Edition (UI Perfect)
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 基础：纯体积查重 + 智能保留 + 用户登录深度删除 + ID熔断保护。
 2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理 + 媒体库透视 + 无中字检测。
-3. 修复：(1) 修复查重报告中包含颜色乱码的问题 (2) 补全中文字幕检测功能。
+3. 修复：(1) 修正特殊符号(如双引号)导致的表格对齐歪斜 (2) 底部汇总增加【总文件数】显示。
 """
 
 import os
@@ -38,7 +38,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.6 Ultimate"
+        self.version = "2.6.1 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -66,7 +66,7 @@ class EmbyScannerPro:
 {Colors.CYAN}                       __/ |                                        {Colors.RESET}
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
-        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Subtitle & Report Fix {Colors.DIM}|{Colors.RESET} All-in-One"
+        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Alignment Fix {Colors.DIM}|{Colors.RESET} All-in-One"
         print(logo)
         print(info_bar.center(80))
         print(f"\n{Colors.DIM}" + "—" * 65 + f"{Colors.RESET}\n")
@@ -168,7 +168,7 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.6'}
+                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.6.1'}
                     return True
             except: pass
         return False
@@ -206,7 +206,6 @@ class EmbyScannerPro:
             size_bytes /= 1024
         return f"{size_bytes:.2f} PB"
 
-    # --- 核心辅助：中文字幕检测 ---
     def has_chinese_subtitle(self, item):
         media_sources = item.get('MediaSources', [])
         if not media_sources: return False
@@ -216,7 +215,6 @@ class EmbyScannerPro:
                     lang = (stream.get('Language') or '').lower()
                     title = (stream.get('Title') or '').lower()
                     display_title = (stream.get('DisplayTitle') or '').lower()
-                    # ISO 代码 + 常见关键词
                     if lang in ['chi', 'zho', 'chn', 'zh', 'yue', 'wuu']: return True
                     keywords = ['chinese', '中文', '简', '繁', 'chs', 'cht', 'hanzi', '中字', 'zh-cn', 'zh-tw']
                     for kw in keywords:
@@ -248,23 +246,23 @@ class EmbyScannerPro:
         
         if 'HDR' in str(video_streams).upper(): info.append(f"{Colors.YELLOW}HDR{Colors.RESET}")
         if 'DOLBY' in str(video_streams).upper() or 'DV' in str(video_streams).upper(): info.append(f"{Colors.CYAN}DV{Colors.RESET}")
-        
-        # 中字标记
-        if self.has_chinese_subtitle(item):
-            info.append(f"{Colors.GREEN}中字{Colors.RESET}")
+        if self.has_chinese_subtitle(item): info.append(f"{Colors.GREEN}中字{Colors.RESET}")
 
         return " | ".join(info)
 
     def get_clean_info(self, info_str):
-        """去除颜色代码，用于写入报告"""
         return re.sub(r'\x1b\[[0-9;]*m', '', info_str)
 
-    # --- UI 辅助：对齐 ---
+    # --- UI 辅助：修复对齐问题 ---
     def get_display_width(self, text):
         width = 0
         for char in text:
-            if unicodedata.east_asian_width(char) in ('F', 'W', 'A'): width += 2
-            else: width += 1
+            # 修复核心：不将 'A' (Ambiguous, 如 “”) 视为宽字符，仅 F/W 视为宽字符
+            # 这能适配大多数现代终端对中文标点和 Smart Quotes 的渲染
+            if unicodedata.east_asian_width(char) in ('F', 'W'): 
+                width += 2
+            else:
+                width += 1
         return width
 
     def pad_text(self, text, width):
@@ -274,7 +272,6 @@ class EmbyScannerPro:
         if padding > 0: return text + " " * padding
         return text
 
-    # --- 核心分页获取 ---
     def _fetch_all_items(self, endpoint, params, limit_per_page=5000):
         all_items = []
         start_index = 0
@@ -292,7 +289,7 @@ class EmbyScannerPro:
             start_index += len(items)
         return all_items
 
-    # --- 功能 1: 重复检测 ---
+    # --- 功能 1: 重复检测 (增加总文件数统计) ---
     def run_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -318,6 +315,7 @@ class EmbyScannerPro:
         self.last_scan_results = {}
         lib_summaries = [] 
         grand_total_bytes = 0
+        grand_total_count = 0 # 全局文件数统计
 
         for lib in target_libs:
             lib_name = lib.get('Name')
@@ -337,6 +335,8 @@ class EmbyScannerPro:
             count_files = len(items)
             total_bytes = sum(item.get('Size', 0) for item in items)
             grand_total_bytes += total_bytes
+            grand_total_count += count_files
+            
             lib_summaries.append(f"{lib_name:<20} : {self.format_size(total_bytes)} ({count_files} files)")
 
             groups = defaultdict(list)
@@ -390,7 +390,8 @@ class EmbyScannerPro:
 
         print(f" {Colors.DIM}└" + "─"*W_NAME + "┴" + "─"*W_COUNT + "┴" + "─"*W_SIZE + "┴" + "─"*W_DUP + "┴" + "─"*W_STAT + "┘" + f"{Colors.RESET}")
         
-        print(f"\n {Colors.CYAN}📊 媒体库总容量: {self.format_size(grand_total_bytes)}{Colors.RESET}")
+        # 底部汇总：增加总文件数显示
+        print(f"\n {Colors.CYAN}📊 媒体库总容量: {self.format_size(grand_total_bytes)}  {Colors.DIM}|{Colors.RESET}  {Colors.CYAN}总文件数: {grand_total_count}{Colors.RESET}")
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_path = os.path.join(self.data_dir, f"report_{timestamp}.txt")
@@ -399,7 +400,7 @@ class EmbyScannerPro:
                 f.write(f"Emby 重复检测报告 - {timestamp}\n")
                 f.write(f"{'='*60}\n")
                 f.write(f"【媒体库容量概览】\n")
-                f.write(f"  - 全部合计             : {self.format_size(grand_total_bytes)}\n")
+                f.write(f"  - 全部合计             : {self.format_size(grand_total_bytes)} ({grand_total_count} files)\n")
                 for summary in lib_summaries:
                     f.write(f"  - {summary}\n")
                 f.write(f"{'='*60}\n\n")
@@ -411,7 +412,6 @@ class EmbyScannerPro:
                          size_str = self.format_size(g['size'])
                          f.write(f"📦 重复组 (单文件: {size_str}):\n")
                          for file in g['files']:
-                             # 关键修复：去除颜色代码后再写入
                              clean_info = self.get_clean_info(file['info'])
                              f.write(f"  - [{size_str}] {file['name']} [{clean_info}]\n")
                              f.write(f"    路径: {file['path']}\n")
@@ -579,7 +579,6 @@ class EmbyScannerPro:
             
             status = f"{Colors.YELLOW}有缺集{Colors.RESET}" if lib_missing_count > 0 else f"{Colors.GREEN}完整{Colors.RESET}"
             missing_str = f"{Colors.RED}{lib_missing_count} 集{Colors.RESET}" if lib_missing_count > 0 else "0"
-            
             sys.stdout.write("\r")
             row_str = (
                 f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 14)} │ {self.pad_text(missing_str, 17)} │ {self.pad_text(status, 12)} │"
