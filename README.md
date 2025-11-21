@@ -3,10 +3,10 @@
 
 
 一个简单易用、零依赖的 Emby 媒体库重复内容检测与清理工具，专为解决“同大异名”重复文件设计。
-![iShot_2025-11-20_14.33.07.png](https://img.huanhq.com/1763620422898_iShot_2025-11-20_14.33.07.png)
+![image.png](https://img.huanhq.com/1763725226970_image.png)
 ![iShot_2025-11-20_15.12.44.png](https://img.huanhq.com/1763622787781_iShot_2025-11-20_15.12.44.png)
 ![image.png](https://img.huanhq.com/1763609336496_image.png)
-![image.png](https://img.huanhq.com/1763719685954_image.png)
+![image.png](https://img.huanhq.com/1763724637218_image.png)
 
 ## ✨ 核心特性 (v2.0 Ultimate)
 
