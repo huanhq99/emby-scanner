@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.5 Ultimate Edition
+Emby媒体库重复检测工具 v2.8 Ultimate Edition
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 基础：纯体积查重 + 智能保留 + 用户登录深度删除 + ID熔断保护。
-2. 扩展：大文件筛选(>20GB) + 剧集缺集检查 + 空文件夹清理 + 媒体库透视。
-3. 架构：Zero-Dependency / Dashboard UI
+2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理。
+3. 升级：扫描上限提升至 100万 + 媒体库透视 Pro (HDR/Remux/Atmos 统计)。
+4. 架构：Zero-Dependency / Dashboard UI
 """
 
 import os
@@ -36,7 +37,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.5 Ultimate"
+        self.version = "2.8 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -64,7 +65,7 @@ class EmbyScannerPro:
 {Colors.CYAN}                       __/ |                                        {Colors.RESET}
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
-        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Large Files > 20G {Colors.DIM}|{Colors.RESET} All-in-One"
+        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Analytics Pro {Colors.DIM}|{Colors.RESET} 1 Million Limit"
         print(logo)
         print(info_bar.center(80))
         print(f"\n{Colors.DIM}" + "—" * 65 + f"{Colors.RESET}\n")
@@ -104,6 +105,7 @@ class EmbyScannerPro:
         max_retries = 3
         for attempt in range(max_retries):
             try:
+                # 增加超时时间至 300s 以应对百万级数据量
                 with urllib.request.urlopen(req, timeout=300) as response:
                     if response.status == 204: return {}
                     return json.loads(response.read().decode('utf-8'))
@@ -166,7 +168,7 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.5'}
+                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.8'}
                     return True
             except: pass
         return False
@@ -209,27 +211,29 @@ class EmbyScannerPro:
         if not media_sources: return "未知"
         info = []
         stream = media_sources[0]
-        # container = stream.get('Container', '').upper()
-        # if container: info.append(container)
+        
         video_streams = [s for s in stream.get('MediaStreams', []) if s.get('Type') == 'Video']
         if video_streams:
             v = video_streams[0]
-            width = v.get('Width')
-            if width:
-                if width >= 3800: res = "4K"
-                elif width >= 1900: res = "1080P"
-                elif width >= 1200: res = "720P"
-                else: res = "SD"
-                if res == "4K": res = f"{Colors.MAGENTA}4K{Colors.RESET}"
-                elif res == "1080P": res = f"{Colors.GREEN}1080P{Colors.RESET}"
-                info.append(res)
+            width = v.get('Width', 0)
+            
+            if width >= 3800: res = "4K"
+            elif width >= 1900: res = "1080P"
+            elif width >= 1200: res = "720P"
+            else: res = "SD"
+            
+            if res == "4K": res = f"{Colors.MAGENTA}4K{Colors.RESET}"
+            elif res == "1080P": res = f"{Colors.GREEN}1080P{Colors.RESET}"
+            info.append(res)
+            
             codec = v.get('Codec', '').upper()
             if codec: info.append(codec)
+            
         if 'HDR' in str(video_streams).upper(): info.append(f"{Colors.YELLOW}HDR{Colors.RESET}")
         if 'DOLBY' in str(video_streams).upper() or 'DV' in str(video_streams).upper(): info.append(f"{Colors.CYAN}DV{Colors.RESET}")
         return " | ".join(info)
 
-    # --- 功能 1: 重复检测 (优化报告) ---
+    # --- 功能 1: 重复检测 ---
     def run_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -245,7 +249,7 @@ class EmbyScannerPro:
         print(f" {Colors.DIM}├" + "─"*22 + "┼" + "─"*14 + "┼" + "─"*17 + "┼" + "─"*12 + "┤" + f"{Colors.RESET}")
 
         self.last_scan_results = {}
-        lib_summaries = [] # 存储每个库的容量信息用于报告头
+        lib_summaries = []
 
         for lib in target_libs:
             lib_name = lib.get('Name')
@@ -257,7 +261,7 @@ class EmbyScannerPro:
             params = {
                 'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': fetch_type,
                 'Fields': 'Path,MediaSources,Size,ProductionYear,SeriesName,IndexNumber,ParentIndexNumber', 
-                'Limit': 100000 
+                'Limit': 1000000 # Limit 提升至 100万
             }
             
             data = self._request("/emby/Items", params)
@@ -265,7 +269,6 @@ class EmbyScannerPro:
             items = data.get('Items', [])
             
             total_bytes = sum(item.get('Size', 0) for item in items)
-            # 记录库摘要
             lib_summaries.append(f"{lib_name:<20} : {self.format_size(total_bytes)}")
 
             groups = defaultdict(list)
@@ -317,7 +320,6 @@ class EmbyScannerPro:
 
         print(f" {Colors.DIM}└" + "─"*22 + "┴" + "─"*14 + "┴" + "─"*17 + "┴" + "─"*12 + "┘" + f"{Colors.RESET}")
         
-        # 保存报告 (优化版)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_path = os.path.join(self.data_dir, f"report_{timestamp}.txt")
         try:
@@ -333,11 +335,9 @@ class EmbyScannerPro:
                      f.write(f"📁 媒体库: {lib}\n")
                      f.write(f"{'-'*40}\n")
                      for g in groups:
-                         # 明确写入每个文件的大小
                          size_str = self.format_size(g['size'])
                          f.write(f"📦 重复组 (单文件: {size_str}):\n")
                          for file in g['files']:
-                             # 在每一行都加上详细大小，满足用户需求
                              f.write(f"  - [{size_str}] {file['name']} [{file['info']}]\n")
                              f.write(f"    路径: {file['path']}\n")
                          f.write("\n")
@@ -436,7 +436,7 @@ class EmbyScannerPro:
             print(f"\n {Colors.GREEN}✅ 完成！成功删除 {success} 个。{Colors.RESET}")
             self.pause()
 
-    # --- 功能 2: 缺集检查 ---
+    # --- 功能 2: 缺集检查 (Limit 100万) ---
     def run_missing_check(self):
         self.clear_screen()
         self.print_banner()
@@ -459,7 +459,8 @@ class EmbyScannerPro:
         for lib in target_libs:
             lib_name = lib.get('Name')
             sys.stdout.write(f" │ {lib_name:<20} ...\r"); sys.stdout.flush()
-            params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Series', 'Limit': 100000}
+            # Limit 提升
+            params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Series', 'Limit': 1000000}
             series_data = self._request("/emby/Items", params)
             if not series_data: continue
             
@@ -556,19 +557,23 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
-    # --- 功能 5: 媒体库透视分析 ---
+    # --- 功能 5: 媒体库透视分析 (Analytics Pro) ---
     def run_analytics(self):
         self.clear_screen()
         self.print_banner()
         print(f" {Colors.YELLOW}📊 正在分析媒体库...{Colors.RESET}")
         
-        params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'MediaSources,Path', 'Limit': 100000}
+        # Limit 提升至 100万
+        params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'MediaSources,Path', 'Limit': 1000000}
         data = self._request("/emby/Items", params)
         if not data: return
         
         stats = {
             'Resolution': defaultdict(int),
             'VideoCodec': defaultdict(int),
+            'SourceType': defaultdict(int), # Remux, etc.
+            'DynamicRange': defaultdict(int), # HDR, Dolby
+            'AudioTech': defaultdict(int), # Atmos, DTS
             'TotalCount': 0
         }
         
@@ -579,7 +584,20 @@ class EmbyScannerPro:
             sources = item.get('MediaSources', [])
             if not sources: continue
             
-            for stream in sources[0].get('MediaStreams', []):
+            source = sources[0]
+            path = item.get('Path', '').upper()
+            name = item.get('Name', '').upper()
+            
+            # Source Type Analysis
+            if 'REMUX' in path or 'REMUX' in name: stats['SourceType']['Remux'] += 1
+            elif 'BLURAY' in path or 'BLU-RAY' in path: stats['SourceType']['BluRay'] += 1
+            elif 'WEB-DL' in path or 'WEBDL' in path: stats['SourceType']['WEB-DL'] += 1
+            elif 'WEBRIP' in path: stats['SourceType']['WEBRip'] += 1
+            elif 'ISO' in path or path.endswith('.ISO'): stats['SourceType']['ISO'] += 1
+            else: stats['SourceType']['Other'] += 1
+            
+            # Video Analysis
+            for stream in source.get('MediaStreams', []):
                 if stream.get('Type') == 'Video':
                     w = stream.get('Width', 0)
                     if w >= 3800: res = "4K"
@@ -587,23 +605,58 @@ class EmbyScannerPro:
                     elif w >= 1200: res = "720P"
                     else: res = "SD"
                     stats['Resolution'][res] += 1
+                    
                     codec = stream.get('Codec', 'Unknown').upper()
                     stats['VideoCodec'][codec] += 1
+                    
+                    disp_title = stream.get('DisplayTitle', '').upper()
+                    title = stream.get('Title', '').upper()
+                    video_range = stream.get('VideoRange', '').upper()
+                    is_dv = 'DOLBY VISION' in disp_title or 'DV' in title or 'DOVI' in video_range
+                    is_hdr = 'HDR' in video_range or 'HDR' in disp_title
+                    if is_dv: stats['DynamicRange']['Dolby Vision'] += 1
+                    elif is_hdr: stats['DynamicRange']['HDR10/+'] += 1
+                    else: stats['DynamicRange']['SDR'] += 1
                     break
-        
-        print(f"\n {Colors.BOLD}=== 媒体库统计 (共 {stats['TotalCount']} 个视频) ==={Colors.RESET}")
-        print(f"\n {Colors.CYAN}📺 分辨率分布:{Colors.RESET}")
+
+            # Audio Analysis
+            audio_streams = [s for s in source.get('MediaStreams', []) if s.get('Type') == 'Audio']
+            found_adv_audio = False
+            for a in audio_streams:
+                title = (a.get('DisplayTitle') or '').upper() + (a.get('Codec') or '').upper() + (a.get('Profile') or '').upper()
+                if 'ATMOS' in title: stats['AudioTech']['Dolby Atmos'] += 1; found_adv_audio = True; break
+                if 'DTS-X' in title or 'DTS:X' in title: stats['AudioTech']['DTS:X'] += 1; found_adv_audio = True; break
+                if 'TRUEHD' in title: stats['AudioTech']['TrueHD'] += 1; found_adv_audio = True; break
+                if 'DTS-HD' in title: stats['AudioTech']['DTS-HD MA'] += 1; found_adv_audio = True; break
+            if not found_adv_audio and audio_streams:
+                codec = audio_streams[0].get('Codec', 'Unknown').upper()
+                stats['AudioTech'][codec] += 1
+
+        print(f"\n {Colors.BOLD}=== 媒体库透视 (共 {stats['TotalCount']} 个视频) ==={Colors.RESET}")
+        print(f"\n {Colors.CYAN}📺 画质分布:{Colors.RESET}")
         for k, v in sorted(stats['Resolution'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<10}: {v}")
-            
-        print(f"\n {Colors.MAGENTA}🎞️  编码分布:{Colors.RESET}")
+
+        print(f"\n {Colors.YELLOW}🌈 动态范围:{Colors.RESET}")
+        for k, v in sorted(stats['DynamicRange'].items(), key=lambda x: x[1], reverse=True):
+            print(f"   {k:<15}: {v}")
+
+        print(f"\n {Colors.MAGENTA}🎞️  编码格式:{Colors.RESET}")
         for k, v in sorted(stats['VideoCodec'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<10}: {v}")
             
+        print(f"\n {Colors.BLUE}💿 版本来源:{Colors.RESET}")
+        for k, v in sorted(stats['SourceType'].items(), key=lambda x: x[1], reverse=True):
+            print(f"   {k:<10}: {v}")
+
+        print(f"\n {Colors.GREEN}🔊 音频技术:{Colors.RESET}")
+        for k, v in sorted(stats['AudioTech'].items(), key=lambda x: x[1], reverse=True)[:8]:
+            print(f"   {k:<15}: {v}")
+        
         print("")
         self.pause()
 
-    # --- 新增功能: 大文件筛选 (>20G) ---
+    # --- 新增功能: 大文件筛选 (>20G) (Limit 100万) ---
     def run_large_file_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -611,62 +664,30 @@ class EmbyScannerPro:
         
         libs = self._request("/emby/Library/MediaFolders")
         if not libs: return
-        
-        # Limit to movies generally as episodes > 20GB are rare
         target_libs = [l for l in libs.get('Items', []) if l.get('CollectionType') == 'movies']
         
         large_files = []
-        # Threshold in bytes: 20 * 1024^3
         THRESHOLD = 20 * (1024**3) 
         
         for lib in target_libs:
             lib_name = lib.get('Name')
-            sys.stdout.write(f" ⏳ 扫描中: {lib_name}...\r")
-            sys.stdout.flush()
-            
-            params = {
-                'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Movie',
-                'Fields': 'Path,MediaSources,Size,ProductionYear', 'Limit': 100000,
-                'MinSize': THRESHOLD # Efficient server-side filtering if supported, else filter client-side
-            }
-            # Note: MinSize param might not be supported by all Emby versions in /Items endpoint, 
-            # so we do client side check too.
-            
+            sys.stdout.write(f" ⏳ 扫描中: {lib_name}...\r"); sys.stdout.flush()
+            params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Movie', 'Fields': 'Path,MediaSources,Size,ProductionYear', 'Limit': 1000000}
             data = self._request("/emby/Items", params)
             if not data: continue
-            
             for item in data.get('Items', []):
                 size = item.get('Size', 0)
                 if size > THRESHOLD:
-                    large_files.append({
-                        'name': item.get('Name'),
-                        'year': item.get('ProductionYear'),
-                        'path': item.get('Path'),
-                        'size': size,
-                        'info': self.get_video_info(item)
-                    })
+                    large_files.append({'name': item.get('Name'), 'year': item.get('ProductionYear'), 'path': item.get('Path'), 'size': size, 'info': self.get_video_info(item)})
         
         if not large_files:
             print(f"\n {Colors.GREEN}✅ 未发现大于 20GB 的电影。{Colors.RESET}")
-            self.pause()
-            return
+            self.pause(); return
 
         print(f"\n {Colors.RED}⚠️  发现 {len(large_files)} 个大于 20GB 的电影。{Colors.RESET}")
         
-        # Generate report
-        report_lines = [
-            "🎬 Emby 大文件筛选报告 (>20GB)",
-            "=" * 80,
-            f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"阈值: 20 GB",
-            f"总计: {len(large_files)} 个文件",
-            "=" * 80,
-            ""
-        ]
-        
-        # Sort by size descending
+        report_lines = ["🎬 Emby 大文件筛选报告 (>20GB)", "=" * 80, f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", f"阈值: 20 GB", "=" * 80, ""]
         large_files.sort(key=lambda x: x['size'], reverse=True)
-        
         for f in large_files:
             size_str = self.format_size(f['size'])
             report_lines.append(f"[{size_str}] {f['name']} ({f['year']})")
@@ -676,13 +697,10 @@ class EmbyScannerPro:
             
         report_name = f"large_files_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         report_path = os.path.join(self.data_dir, report_name)
-        
         try:
-            with open(report_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(report_lines))
+            with open(report_path, 'w', encoding='utf-8') as f: f.write('\n'.join(report_lines))
             print(f" 📄 报告已生成: {Colors.BOLD}{report_path}{Colors.RESET}")
         except: pass
-        
         self.pause()
 
     # --- 菜单 ---
@@ -694,16 +712,14 @@ class EmbyScannerPro:
             server_status = f"{Colors.GREEN}● 已连接{Colors.RESET}" if self.server_url else f"{Colors.RED}● 未配置{Colors.RESET}"
             print(f" {Colors.DIM}Server Status:{Colors.RESET} {server_status}   {Colors.DIM}Data Path:{Colors.RESET} {self.data_dir}\n")
             
-            # 左列：核心功能
             print(f" {Colors.BOLD}--- 核心维护 ---{Colors.RESET}")
             print(f" {Colors.CYAN}[1]{Colors.RESET} 🚀  重复文件扫描 (Dedupe)")
             print(f" {Colors.MAGENTA}[5]{Colors.RESET} 🔍  剧集缺集检查 (Missing)")
             
-            # 右列/下行：扩展功能
             print(f"\n {Colors.BOLD}--- 扩展工具 ---{Colors.RESET}")
             print(f" {Colors.BLUE}[6]{Colors.RESET} 🧹  垃圾清理 (Empty Folders)")
             print(f" {Colors.BLUE}[7]{Colors.RESET} 📊  媒体库透视 (Analytics)")
-            print(f" {Colors.BLUE}[8]{Colors.RESET} 🐘  大文件筛选 (>20GB)") # New Option
+            print(f" {Colors.BLUE}[8]{Colors.RESET} 🐘  大文件筛选 (>20GB)") 
             
             print(f"\n {Colors.BOLD}--- 系统设置 ---{Colors.RESET}")
             print(f" {Colors.DIM}[2] 配置服务器   [3] 查看报告   [4] 重置数据   [0] 退出{Colors.RESET}")
