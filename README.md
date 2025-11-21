@@ -6,7 +6,7 @@
 ![iShot_2025-11-20_14.33.07.png](https://img.huanhq.com/1763620422898_iShot_2025-11-20_14.33.07.png)
 ![iShot_2025-11-20_15.12.44.png](https://img.huanhq.com/1763622787781_iShot_2025-11-20_15.12.44.png)
 ![image.png](https://img.huanhq.com/1763609336496_image.png)
-![iShot_2025-11-20_15.09.01.png](https://img.huanhq.com/1763622581738_iShot_2025-11-20_15.09.01.png)
+![image.png](https://img.huanhq.com/1763719685954_image.png)
 
 ## ✨ 核心特性 (v2.0 Ultimate)
 
