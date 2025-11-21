@@ -1,7 +1,5 @@
 # Emby媒体库重复检测工具
 
-
-
 一个简单易用、零依赖的 Emby 媒体库重复内容检测与清理工具，专为解决“同大异名”重复文件设计。
 ![image.png](https://img.huanhq.com/1763725226970_image.png)
 ![iShot_2025-11-20_15.12.44.png](https://img.huanhq.com/1763622787781_iShot_2025-11-20_15.12.44.png)
