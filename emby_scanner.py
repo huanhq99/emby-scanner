@@ -528,20 +528,20 @@ class EmbyScannerPro:
         for lib in target_libs:
             lib_name = lib.get('Name')
             sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} ...\r"); sys.stdout.flush()
+            params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Series', 'Limit': 1000000}
+            series_data = self._request("/emby/Items", params)
+            if not series_data: continue
             
-            # 分页获取所有剧集
-            params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Series'}
-            all_series = self._fetch_all_items("/emby/Items", params, 5000)
-            
+            all_series = series_data.get('Items', [])
             series_count = len(all_series)
             lib_missing_count = 0
             lib_report_buffer = []
 
             for series in all_series:
-                ep_params = {'ParentId': series['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Episode', 'Fields': 'ParentIndexNumber,IndexNumber'}
-                # 降低单次分页大小，防止超时
-                episodes = self._fetch_all_items("/emby/Items", ep_params, 2000)
-                
+                ep_params = {'ParentId': series['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Episode', 'Fields': 'ParentIndexNumber,IndexNumber', 'Limit': 10000}
+                ep_data = self._request("/emby/Items", ep_params)
+                if not ep_data: continue
+                episodes = ep_data.get('Items', [])
                 season_map = defaultdict(list)
                 for ep in episodes:
                     s = ep.get('ParentIndexNumber', 1); e_idx = ep.get('IndexNumber')
