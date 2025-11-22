@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.8.1 Ultimate Edition (Group Stats)
+Emby媒体库重复检测工具 v2.8.2 Ultimate Edition (Pipe Fix)
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 基础：纯体积查重 + 智能保留 + 用户登录深度删除 + ID熔断保护。
-2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理。
-3. 升级：媒体库透视 Pro (移除编码列，新增制作组 Top10 统计)。
+2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理 + 媒体库透视。
+3. 修复：优化输入流处理，支持 'curl | python3' 管道模式运行，解决 /dev/fd 报错。
 """
 
 import os
@@ -38,7 +38,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.8.1 Ultimate"
+        self.version = "2.8.2 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -48,6 +48,7 @@ class EmbyScannerPro:
         self.access_token = ""
         self.last_scan_results = {} 
 
+        # 路径修复：优先使用 HOME 环境变量
         home_dir = os.environ.get('HOME')
         self.script_dir = home_dir if home_dir else os.path.expanduser('~')
         self.data_dir = os.path.join(self.script_dir, "emby_scanner_data")
@@ -66,10 +67,24 @@ class EmbyScannerPro:
 {Colors.CYAN}                       __/ |                                        {Colors.RESET}
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
-        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Release Groups {Colors.DIM}|{Colors.RESET} 1 Million Limit"
+        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Pipe Support {Colors.DIM}|{Colors.RESET} 1 Million Limit"
         print(logo)
         print(info_bar.center(80))
         print(f"\n{Colors.DIM}" + "—" * 65 + f"{Colors.RESET}\n")
+
+    # --- 核心修复：从 /dev/tty 读取输入 ---
+    def _read_input(self):
+        """尝试从终端设备读取输入，即使 stdin 被管道占用"""
+        try:
+            # 如果 stdin 不是 tty (说明是管道运行)，尝试打开 /dev/tty
+            if not sys.stdin.isatty():
+                with open('/dev/tty', 'r') as tty:
+                    return tty.readline().strip()
+            else:
+                return sys.stdin.readline().strip()
+        except Exception:
+            # 回退方案
+            return input().strip()
 
     def get_user_input(self, prompt, default=""):
         full_prompt = f" {Colors.CYAN}▶{Colors.RESET} {Colors.BOLD}{prompt}{Colors.RESET}"
@@ -79,7 +94,7 @@ class EmbyScannerPro:
         try:
             sys.stdout.write(full_prompt)
             sys.stdout.flush()
-            user_input = sys.stdin.readline().strip()
+            user_input = self._read_input()
             return user_input if user_input else default
         except (EOFError, KeyboardInterrupt):
             sys.exit(0)
@@ -87,7 +102,13 @@ class EmbyScannerPro:
     def pause(self):
         print(f"\n {Colors.DIM}Press {Colors.GREEN}[Enter]{Colors.RESET}{Colors.DIM} to continue...{Colors.RESET}", end="")
         sys.stdout.flush()
-        sys.stdin.readline()
+        try:
+            if not sys.stdin.isatty():
+                with open('/dev/tty', 'r') as tty:
+                    tty.readline()
+            else:
+                sys.stdin.readline()
+        except: pass
 
     def _request(self, endpoint, params=None, method='GET', auth_header=None, post_data=None):
         url = f"{self.server_url}{endpoint}"
@@ -126,14 +147,22 @@ class EmbyScannerPro:
         print(f"{Colors.DIM}" + "-" * 40 + f"{Colors.RESET}")
         
         username = self.get_user_input("用户名")
+        
+        # 密码输入处理
+        print(f" {Colors.CYAN}▶{Colors.RESET} {Colors.BOLD}密码{Colors.RESET}: ", end="")
+        sys.stdout.flush()
         try:
-            if sys.stdin.isatty():
-                import getpass
-                password = getpass.getpass(f" {Colors.CYAN}▶{Colors.RESET} {Colors.BOLD}密码{Colors.RESET}: ")
+            # 尝试从 tty 读取密码
+            if not sys.stdin.isatty():
+                # 简单的非回显读取在纯 python + pipe 环境较难完美实现
+                # 这里为了兼容性，直接从 tty 读取（可能会回显，但在 pipe 模式下这是权衡）
+                 with open('/dev/tty', 'r') as tty:
+                    password = tty.readline().strip()
             else:
-                password = self.get_user_input("密码")
+                # 正常环境使用 getpass
+                password = getpass.getpass("")
         except:
-            password = self.get_user_input("密码")
+             password = self.get_user_input("密码")
 
         print(f"\n 🔄 正在验证...")
         auth_data = {"Username": username, "Pw": password}
@@ -247,10 +276,8 @@ class EmbyScannerPro:
         
         if 'HDR' in str(video_streams).upper(): info.append(f"{Colors.YELLOW}HDR{Colors.RESET}")
         if 'DOLBY' in str(video_streams).upper() or 'DV' in str(video_streams).upper(): info.append(f"{Colors.CYAN}DV{Colors.RESET}")
+        if self.has_chinese_subtitle(item): info.append(f"{Colors.GREEN}中字{Colors.RESET}")
         
-        if self.has_chinese_subtitle(item):
-            info.append(f"{Colors.GREEN}中字{Colors.RESET}")
-            
         return " | ".join(info)
 
     def get_clean_info(self, info_str):
@@ -287,7 +314,6 @@ class EmbyScannerPro:
             start_index += len(items)
         return all_items
 
-    # --- 功能 1: 重复检测 ---
     def run_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -318,6 +344,7 @@ class EmbyScannerPro:
         for lib in target_libs:
             lib_name = lib.get('Name')
             ctype = lib.get('CollectionType')
+            
             loading_txt = f"{Colors.DIM}Scanning...{Colors.RESET}"
             sys.stdout.write(f" │ {self.pad_text(lib_name, W_NAME)} │ {self.pad_text(loading_txt, W_COUNT)} ...\r")
             sys.stdout.flush()
@@ -509,7 +536,6 @@ class EmbyScannerPro:
             print(f"\n {Colors.GREEN}✅ 完成！成功删除 {success} 个。{Colors.RESET}")
             self.pause()
 
-    # --- 功能 2: 缺集检查 ---
     def run_missing_check(self):
         self.clear_screen()
         self.print_banner()
@@ -577,9 +603,7 @@ class EmbyScannerPro:
             status = f"{Colors.YELLOW}有缺集{Colors.RESET}" if lib_missing_count > 0 else f"{Colors.GREEN}完整{Colors.RESET}"
             missing_str = f"{Colors.RED}{lib_missing_count} 集{Colors.RESET}" if lib_missing_count > 0 else "0"
             sys.stdout.write("\r")
-            row_str = (
-                f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 14)} │ {self.pad_text(missing_str, 17)} │ {self.pad_text(status, 12)} │"
-            )
+            row_str = f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 14)} │ {self.pad_text(missing_str, 17)} │ {self.pad_text(status, 12)} │"
             print(row_str)
 
         print(f" {Colors.DIM}└" + "─"*22 + "┴" + "─"*14 + "┴" + "─"*17 + "┴" + "─"*12 + "┘" + f"{Colors.RESET}")
@@ -592,7 +616,6 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
-    # --- 功能 3: 垃圾清理 ---
     def run_junk_cleaner(self):
         self.clear_screen()
         self.print_banner()
@@ -632,7 +655,6 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
-    # --- 功能 5: 媒体库透视分析 (Analytics Pro) ---
     def run_analytics(self):
         self.clear_screen()
         self.print_banner()
@@ -645,6 +667,7 @@ class EmbyScannerPro:
 
         stats = {
             'Resolution': defaultdict(int),
+            'VideoCodec': defaultdict(int),
             'SourceType': defaultdict(int), 
             'DynamicRange': defaultdict(int), 
             'AudioTech': defaultdict(int),
@@ -663,7 +686,7 @@ class EmbyScannerPro:
             path = item.get('Path', '').upper()
             name = item.get('Name', '').upper()
 
-            # 1. Source Type
+            # Source Type
             if 'REMUX' in path or 'REMUX' in name: stats['SourceType']['Remux'] += 1
             elif 'BLURAY' in path or 'BLU-RAY' in path: stats['SourceType']['BluRay'] += 1
             elif 'WEB-DL' in path or 'WEBDL' in path: stats['SourceType']['WEB-DL'] += 1
@@ -671,15 +694,12 @@ class EmbyScannerPro:
             elif 'ISO' in path or path.endswith('.ISO'): stats['SourceType']['ISO'] += 1
             else: stats['SourceType']['Other'] += 1
             
-            # 2. Release Group (Filename extraction)
+            # Release Group
             try:
-                # Try to extract group from filename (e.g. ...-Group.mkv)
                 fname = os.path.basename(item.get('Path', ''))
                 fname_no_ext = os.path.splitext(fname)[0]
                 if '-' in fname_no_ext:
-                    # Take the part after the last hyphen
                     group = fname_no_ext.split('-')[-1].strip()
-                    # Basic validation to filter out junk (2-15 chars, not digit only)
                     if 1 < len(group) < 15 and not group.isdigit():
                          stats['ReleaseGroup'][group] += 1
             except: pass
@@ -702,7 +722,6 @@ class EmbyScannerPro:
                     else: stats['DynamicRange']['SDR'] += 1
                     break
 
-            # Audio Analysis
             audio_streams = [s for s in source.get('MediaStreams', []) if s.get('Type') == 'Audio']
             for a in audio_streams:
                 t = (a.get('DisplayTitle') or '').upper() + (a.get('Codec') or '').upper() + (a.get('Profile') or '').upper()
@@ -712,11 +731,10 @@ class EmbyScannerPro:
                 if 'DTS-HD' in t: stats['AudioTech']['DTS-HD MA'] += 1; break
         
         print(f"\n {Colors.BOLD}=== 媒体库透视 (共 {stats['TotalCount']} 个视频) ==={Colors.RESET}")
-        
         print(f"\n {Colors.CYAN}📺 画质分布:{Colors.RESET}")
         for k, v in sorted(stats['Resolution'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<10}: {v}")
-            
+
         print(f"\n {Colors.YELLOW}🌈 动态范围:{Colors.RESET}")
         for k, v in sorted(stats['DynamicRange'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<15}: {v}")
@@ -736,7 +754,6 @@ class EmbyScannerPro:
         print("")
         self.pause()
 
-    # --- 新增功能: 大文件筛选 (>20G) ---
     def run_large_file_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -788,7 +805,6 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
-    # --- 新增功能: 无中字检测 ---
     def run_no_chinese_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -847,7 +863,6 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
-    # --- 菜单 ---
     def main_menu(self):
         while True:
             self.clear_screen()
