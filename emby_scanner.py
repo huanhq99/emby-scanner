@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.7 Ultimate Edition (Analytics Pro)
+Emby媒体库重复检测工具 v2.8.1 Ultimate Edition (Group Stats)
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 基础：纯体积查重 + 智能保留 + 用户登录深度删除 + ID熔断保护。
-2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理 + 无中字检测。
-3. 升级：媒体库透视分析 Pro (增加 HDR/杜比视界/Remux/全景声 统计)。
+2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理。
+3. 升级：媒体库透视 Pro (移除编码列，新增制作组 Top10 统计)。
 """
 
 import os
@@ -38,7 +38,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.7 Ultimate"
+        self.version = "2.8.1 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -66,7 +66,7 @@ class EmbyScannerPro:
 {Colors.CYAN}                       __/ |                                        {Colors.RESET}
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
-        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Analytics Pro {Colors.DIM}|{Colors.RESET} HDR/DV/Atmos"
+        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Release Groups {Colors.DIM}|{Colors.RESET} 1 Million Limit"
         print(logo)
         print(info_bar.center(80))
         print(f"\n{Colors.DIM}" + "—" * 65 + f"{Colors.RESET}\n")
@@ -168,7 +168,7 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.7'}
+                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.8.1'}
                     return True
             except: pass
         return False
@@ -226,6 +226,7 @@ class EmbyScannerPro:
         if not media_sources: return "未知"
         info = []
         stream = media_sources[0]
+        
         video_streams = [s for s in stream.get('MediaStreams', []) if s.get('Type') == 'Video']
         if video_streams:
             v = video_streams[0]
@@ -631,23 +632,23 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
-    # --- 功能 5: 媒体库透视分析 (Analytics Pro - Paging Fixed) ---
+    # --- 功能 5: 媒体库透视分析 (Analytics Pro) ---
     def run_analytics(self):
         self.clear_screen()
         self.print_banner()
         print(f" {Colors.YELLOW}📊 正在分析媒体库...{Colors.RESET}")
         
         params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'MediaSources,Path'}
-        all_items = self._fetch_all_items("/emby/Items", params, limit_per_page=20000)
+        all_items = self._fetch_all_items("/emby/Items", params, limit_per_page=10000)
         
         if not all_items: return
 
         stats = {
             'Resolution': defaultdict(int),
-            'VideoCodec': defaultdict(int),
             'SourceType': defaultdict(int), 
             'DynamicRange': defaultdict(int), 
             'AudioTech': defaultdict(int),
+            'ReleaseGroup': defaultdict(int),
             'TotalCount': 0
         }
         
@@ -670,6 +671,19 @@ class EmbyScannerPro:
             elif 'ISO' in path or path.endswith('.ISO'): stats['SourceType']['ISO'] += 1
             else: stats['SourceType']['Other'] += 1
             
+            # 2. Release Group (Filename extraction)
+            try:
+                # Try to extract group from filename (e.g. ...-Group.mkv)
+                fname = os.path.basename(item.get('Path', ''))
+                fname_no_ext = os.path.splitext(fname)[0]
+                if '-' in fname_no_ext:
+                    # Take the part after the last hyphen
+                    group = fname_no_ext.split('-')[-1].strip()
+                    # Basic validation to filter out junk (2-15 chars, not digit only)
+                    if 1 < len(group) < 15 and not group.isdigit():
+                         stats['ReleaseGroup'][group] += 1
+            except: pass
+
             for stream in source.get('MediaStreams', []):
                 if stream.get('Type') == 'Video':
                     w = stream.get('Width', 0)
@@ -679,8 +693,6 @@ class EmbyScannerPro:
                     elif w >= 1200 or h >= 700: res = "720P"
                     else: res = "SD"
                     stats['Resolution'][res] += 1
-                    codec = stream.get('Codec', 'Unknown').upper()
-                    stats['VideoCodec'][codec] += 1
                     
                     disp = stream.get('DisplayTitle', '').upper()
                     title = stream.get('Title', '').upper()
@@ -692,18 +704,15 @@ class EmbyScannerPro:
 
             # Audio Analysis
             audio_streams = [s for s in source.get('MediaStreams', []) if s.get('Type') == 'Audio']
-            found_adv = False
             for a in audio_streams:
                 t = (a.get('DisplayTitle') or '').upper() + (a.get('Codec') or '').upper() + (a.get('Profile') or '').upper()
-                if 'ATMOS' in t: stats['AudioTech']['Dolby Atmos'] += 1; found_adv = True; break
-                if 'DTS-X' in t or 'DTS:X' in t: stats['AudioTech']['DTS:X'] += 1; found_adv = True; break
-                if 'TRUEHD' in t: stats['AudioTech']['TrueHD'] += 1; found_adv = True; break
-                if 'DTS-HD' in t: stats['AudioTech']['DTS-HD MA'] += 1; found_adv = True; break
-            if not found_adv and audio_streams:
-                codec = audio_streams[0].get('Codec', 'Unknown').upper()
-                stats['AudioTech'][codec] += 1
+                if 'ATMOS' in t: stats['AudioTech']['Dolby Atmos'] += 1; break
+                if 'DTS-X' in t or 'DTS:X' in t: stats['AudioTech']['DTS:X'] += 1; break
+                if 'TRUEHD' in t: stats['AudioTech']['TrueHD'] += 1; break
+                if 'DTS-HD' in t: stats['AudioTech']['DTS-HD MA'] += 1; break
         
-        print(f"\n {Colors.BOLD}=== 媒体库统计 (共 {stats['TotalCount']} 个视频) ==={Colors.RESET}")
+        print(f"\n {Colors.BOLD}=== 媒体库透视 (共 {stats['TotalCount']} 个视频) ==={Colors.RESET}")
+        
         print(f"\n {Colors.CYAN}📺 画质分布:{Colors.RESET}")
         for k, v in sorted(stats['Resolution'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<10}: {v}")
@@ -712,17 +721,17 @@ class EmbyScannerPro:
         for k, v in sorted(stats['DynamicRange'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<15}: {v}")
 
-        print(f"\n {Colors.MAGENTA}🎞️  编码格式:{Colors.RESET}")
-        for k, v in sorted(stats['VideoCodec'].items(), key=lambda x: x[1], reverse=True):
-            print(f"   {k:<10}: {v}")
-        
         print(f"\n {Colors.BLUE}💿 版本来源:{Colors.RESET}")
         for k, v in sorted(stats['SourceType'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<10}: {v}")
 
-        print(f"\n {Colors.GREEN}🔊 音频技术:{Colors.RESET}")
-        for k, v in sorted(stats['AudioTech'].items(), key=lambda x: x[1], reverse=True)[:8]:
+        print(f"\n {Colors.GREEN}🔊 音频技术 (Top):{Colors.RESET}")
+        for k, v in sorted(stats['AudioTech'].items(), key=lambda x: x[1], reverse=True)[:5]:
             print(f"   {k:<15}: {v}")
+            
+        print(f"\n {Colors.MAGENTA}🏷️  制作组 (Top 10):{Colors.RESET}")
+        for k, v in sorted(stats['ReleaseGroup'].items(), key=lambda x: x[1], reverse=True)[:10]:
+             print(f"   {k:<15}: {v}")
             
         print("")
         self.pause()
