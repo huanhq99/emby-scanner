@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.9.2 Ultimate Edition (Debug Fix)
+Emby媒体库重复检测工具 v2.9.3 Ultimate Edition (Bug Fix)
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 基础：纯体积查重 + 智能保留 + 用户登录深度删除 + ID熔断保护。
 2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理 + 媒体库透视。
-3. 修复：移除全局异常捕获以便排查 Crash 问题；优化无中字检测的分页大小。
+3. 修复：解决无中字检测功能报 AttributeError 的问题。
 """
 
 import os
@@ -38,7 +38,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.9.2 Ultimate"
+        self.version = "2.9.3 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -66,7 +66,7 @@ class EmbyScannerPro:
 {Colors.CYAN}                       __/ |                                        {Colors.RESET}
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
-        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Debug Edition {Colors.DIM}|{Colors.RESET} All-in-One"
+        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Fix Crash {Colors.DIM}|{Colors.RESET} All-in-One"
         print(logo)
         print(info_bar.center(80))
         print(f"\n{Colors.DIM}" + "—" * 65 + f"{Colors.RESET}\n")
@@ -118,7 +118,6 @@ class EmbyScannerPro:
                          pass 
                     return None
             except Exception:
-                # 这里不吞异常了，如果真炸了让它炸出来看看
                 return None
 
     def login_user(self):
@@ -169,7 +168,7 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.9.2'}
+                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.9.3'}
                     return True
             except: pass
         return False
@@ -267,7 +266,6 @@ class EmbyScannerPro:
         if padding > 0: return text + " " * padding
         return text
 
-    # --- 核心分页获取 ---
     def _fetch_all_items(self, endpoint, params, limit_per_page=5000):
         all_items = []
         start_index = 0
@@ -316,7 +314,6 @@ class EmbyScannerPro:
         for lib in target_libs:
             lib_name = lib.get('Name')
             ctype = lib.get('CollectionType')
-            
             loading_txt = f"{Colors.DIM}Scanning...{Colors.RESET}"
             sys.stdout.write(f" │ {self.pad_text(lib_name, W_NAME)} │ {self.pad_text(loading_txt, W_COUNT)} ...\r")
             sys.stdout.flush()
