@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.8.2 Ultimate Edition (Pipe Fix)
+Emby媒体库重复检测工具 v2.9.1 Ultimate Edition (Grouped Report Fix)
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 基础：纯体积查重 + 智能保留 + 用户登录深度删除 + ID熔断保护。
 2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理 + 媒体库透视。
-3. 修复：优化输入流处理，支持 'curl | python3' 管道模式运行，解决 /dev/fd 报错。
+3. 修复：【无中字检测】报告优化，剧集不再散乱显示，改为按剧名归类展示 (Series -> Episodes)。
 """
 
 import os
@@ -38,7 +38,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.8.2 Ultimate"
+        self.version = "2.9.1 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -48,7 +48,6 @@ class EmbyScannerPro:
         self.access_token = ""
         self.last_scan_results = {} 
 
-        # 路径修复：优先使用 HOME 环境变量
         home_dir = os.environ.get('HOME')
         self.script_dir = home_dir if home_dir else os.path.expanduser('~')
         self.data_dir = os.path.join(self.script_dir, "emby_scanner_data")
@@ -67,24 +66,10 @@ class EmbyScannerPro:
 {Colors.CYAN}                       __/ |                                        {Colors.RESET}
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
-        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Pipe Support {Colors.DIM}|{Colors.RESET} 1 Million Limit"
+        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Grouped Report Fix {Colors.DIM}|{Colors.RESET} All-in-One"
         print(logo)
         print(info_bar.center(80))
         print(f"\n{Colors.DIM}" + "—" * 65 + f"{Colors.RESET}\n")
-
-    # --- 核心修复：从 /dev/tty 读取输入 ---
-    def _read_input(self):
-        """尝试从终端设备读取输入，即使 stdin 被管道占用"""
-        try:
-            # 如果 stdin 不是 tty (说明是管道运行)，尝试打开 /dev/tty
-            if not sys.stdin.isatty():
-                with open('/dev/tty', 'r') as tty:
-                    return tty.readline().strip()
-            else:
-                return sys.stdin.readline().strip()
-        except Exception:
-            # 回退方案
-            return input().strip()
 
     def get_user_input(self, prompt, default=""):
         full_prompt = f" {Colors.CYAN}▶{Colors.RESET} {Colors.BOLD}{prompt}{Colors.RESET}"
@@ -94,7 +79,7 @@ class EmbyScannerPro:
         try:
             sys.stdout.write(full_prompt)
             sys.stdout.flush()
-            user_input = self._read_input()
+            user_input = sys.stdin.readline().strip()
             return user_input if user_input else default
         except (EOFError, KeyboardInterrupt):
             sys.exit(0)
@@ -102,13 +87,7 @@ class EmbyScannerPro:
     def pause(self):
         print(f"\n {Colors.DIM}Press {Colors.GREEN}[Enter]{Colors.RESET}{Colors.DIM} to continue...{Colors.RESET}", end="")
         sys.stdout.flush()
-        try:
-            if not sys.stdin.isatty():
-                with open('/dev/tty', 'r') as tty:
-                    tty.readline()
-            else:
-                sys.stdin.readline()
-        except: pass
+        sys.stdin.readline()
 
     def _request(self, endpoint, params=None, method='GET', auth_header=None, post_data=None):
         url = f"{self.server_url}{endpoint}"
@@ -147,22 +126,14 @@ class EmbyScannerPro:
         print(f"{Colors.DIM}" + "-" * 40 + f"{Colors.RESET}")
         
         username = self.get_user_input("用户名")
-        
-        # 密码输入处理
-        print(f" {Colors.CYAN}▶{Colors.RESET} {Colors.BOLD}密码{Colors.RESET}: ", end="")
-        sys.stdout.flush()
         try:
-            # 尝试从 tty 读取密码
-            if not sys.stdin.isatty():
-                # 简单的非回显读取在纯 python + pipe 环境较难完美实现
-                # 这里为了兼容性，直接从 tty 读取（可能会回显，但在 pipe 模式下这是权衡）
-                 with open('/dev/tty', 'r') as tty:
-                    password = tty.readline().strip()
+            if sys.stdin.isatty():
+                import getpass
+                password = getpass.getpass(f" {Colors.CYAN}▶{Colors.RESET} {Colors.BOLD}密码{Colors.RESET}: ")
             else:
-                # 正常环境使用 getpass
-                password = getpass.getpass("")
+                password = self.get_user_input("密码")
         except:
-             password = self.get_user_input("密码")
+            password = self.get_user_input("密码")
 
         print(f"\n 🔄 正在验证...")
         auth_data = {"Username": username, "Pw": password}
@@ -197,7 +168,7 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.8.1'}
+                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.9.1'}
                     return True
             except: pass
         return False
@@ -235,17 +206,21 @@ class EmbyScannerPro:
             size_bytes /= 1024
         return f"{size_bytes:.2f} PB"
 
-    def has_chinese_subtitle(self, item):
+    # --- 核心: 智能中文内容检测 ---
+    def has_chinese_content(self, item):
         media_sources = item.get('MediaSources', [])
         if not media_sources: return False
+        
         for source in media_sources:
             for stream in source.get('MediaStreams', []):
-                if stream.get('Type') == 'Subtitle':
+                stype = stream.get('Type')
+                if stype in ['Subtitle', 'Audio']:
                     lang = (stream.get('Language') or '').lower()
                     title = (stream.get('Title') or '').lower()
                     display_title = (stream.get('DisplayTitle') or '').lower()
+                    
                     if lang in ['chi', 'zho', 'chn', 'zh', 'yue', 'wuu']: return True
-                    keywords = ['chinese', '中文', '简', '繁', 'chs', 'cht', 'hanzi', '中字', 'zh-cn', 'zh-tw']
+                    keywords = ['chinese', '中文', '简', '繁', 'chs', 'cht', 'hanzi', '中字', 'zh-cn', 'zh-tw', '国语', '普通话', '粤语', 'cantonese', 'mandarin']
                     for kw in keywords:
                         if kw in title or kw in display_title: return True
         return False
@@ -255,7 +230,6 @@ class EmbyScannerPro:
         if not media_sources: return "未知"
         info = []
         stream = media_sources[0]
-        
         video_streams = [s for s in stream.get('MediaStreams', []) if s.get('Type') == 'Video']
         if video_streams:
             v = video_streams[0]
@@ -265,19 +239,14 @@ class EmbyScannerPro:
             elif width >= 1900 or height >= 1000: res = "1080P"
             elif width >= 1200 or height >= 700: res = "720P"
             else: res = "SD"
-            
-            if res == "4K": res_color = f"{Colors.MAGENTA}4K{Colors.RESET}"
-            elif res == "1080P": res_color = f"{Colors.GREEN}1080P{Colors.RESET}"
-            else: res_color = res
-            info.append(res_color)
-            
+            if res == "4K": res = f"{Colors.MAGENTA}4K{Colors.RESET}"
+            elif res == "1080P": res = f"{Colors.GREEN}1080P{Colors.RESET}"
+            info.append(res)
             codec = v.get('Codec', '').upper()
             if codec: info.append(codec)
-        
         if 'HDR' in str(video_streams).upper(): info.append(f"{Colors.YELLOW}HDR{Colors.RESET}")
         if 'DOLBY' in str(video_streams).upper() or 'DV' in str(video_streams).upper(): info.append(f"{Colors.CYAN}DV{Colors.RESET}")
-        if self.has_chinese_subtitle(item): info.append(f"{Colors.GREEN}中字{Colors.RESET}")
-        
+        if self.has_chinese_content(item): info.append(f"{Colors.GREEN}中字/国语{Colors.RESET}")
         return " | ".join(info)
 
     def get_clean_info(self, info_str):
@@ -314,6 +283,7 @@ class EmbyScannerPro:
             start_index += len(items)
         return all_items
 
+    # --- 功能 1: 重复检测 ---
     def run_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -344,7 +314,6 @@ class EmbyScannerPro:
         for lib in target_libs:
             lib_name = lib.get('Name')
             ctype = lib.get('CollectionType')
-            
             loading_txt = f"{Colors.DIM}Scanning...{Colors.RESET}"
             sys.stdout.write(f" │ {self.pad_text(lib_name, W_NAME)} │ {self.pad_text(loading_txt, W_COUNT)} ...\r")
             sys.stdout.flush()
@@ -536,6 +505,7 @@ class EmbyScannerPro:
             print(f"\n {Colors.GREEN}✅ 完成！成功删除 {success} 个。{Colors.RESET}")
             self.pause()
 
+    # --- 功能 2: 缺集检查 ---
     def run_missing_check(self):
         self.clear_screen()
         self.print_banner()
@@ -603,7 +573,9 @@ class EmbyScannerPro:
             status = f"{Colors.YELLOW}有缺集{Colors.RESET}" if lib_missing_count > 0 else f"{Colors.GREEN}完整{Colors.RESET}"
             missing_str = f"{Colors.RED}{lib_missing_count} 集{Colors.RESET}" if lib_missing_count > 0 else "0"
             sys.stdout.write("\r")
-            row_str = f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 14)} │ {self.pad_text(missing_str, 17)} │ {self.pad_text(status, 12)} │"
+            row_str = (
+                f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 14)} │ {self.pad_text(missing_str, 17)} │ {self.pad_text(status, 12)} │"
+            )
             print(row_str)
 
         print(f" {Colors.DIM}└" + "─"*22 + "┴" + "─"*14 + "┴" + "─"*17 + "┴" + "─"*12 + "┘" + f"{Colors.RESET}")
@@ -616,6 +588,7 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
+    # --- 功能 3: 垃圾清理 ---
     def run_junk_cleaner(self):
         self.clear_screen()
         self.print_banner()
@@ -655,6 +628,7 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
+    # --- 功能 5: 媒体库透视分析 (v2.6) ---
     def run_analytics(self):
         self.clear_screen()
         self.print_banner()
@@ -686,7 +660,7 @@ class EmbyScannerPro:
             path = item.get('Path', '').upper()
             name = item.get('Name', '').upper()
 
-            # Source Type
+            # 1. Source Type
             if 'REMUX' in path or 'REMUX' in name: stats['SourceType']['Remux'] += 1
             elif 'BLURAY' in path or 'BLU-RAY' in path: stats['SourceType']['BluRay'] += 1
             elif 'WEB-DL' in path or 'WEBDL' in path: stats['SourceType']['WEB-DL'] += 1
@@ -694,7 +668,7 @@ class EmbyScannerPro:
             elif 'ISO' in path or path.endswith('.ISO'): stats['SourceType']['ISO'] += 1
             else: stats['SourceType']['Other'] += 1
             
-            # Release Group
+            # 2. Release Group
             try:
                 fname = os.path.basename(item.get('Path', ''))
                 fname_no_ext = os.path.splitext(fname)[0]
@@ -713,6 +687,8 @@ class EmbyScannerPro:
                     elif w >= 1200 or h >= 700: res = "720P"
                     else: res = "SD"
                     stats['Resolution'][res] += 1
+                    codec = stream.get('Codec', 'Unknown').upper()
+                    stats['VideoCodec'][codec] += 1
                     
                     disp = stream.get('DisplayTitle', '').upper()
                     title = stream.get('Title', '').upper()
@@ -734,11 +710,15 @@ class EmbyScannerPro:
         print(f"\n {Colors.CYAN}📺 画质分布:{Colors.RESET}")
         for k, v in sorted(stats['Resolution'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<10}: {v}")
-
+            
         print(f"\n {Colors.YELLOW}🌈 动态范围:{Colors.RESET}")
         for k, v in sorted(stats['DynamicRange'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<15}: {v}")
 
+        print(f"\n {Colors.MAGENTA}🎞️  编码格式:{Colors.RESET}")
+        for k, v in sorted(stats['VideoCodec'].items(), key=lambda x: x[1], reverse=True):
+            print(f"   {k:<10}: {v}")
+        
         print(f"\n {Colors.BLUE}💿 版本来源:{Colors.RESET}")
         for k, v in sorted(stats['SourceType'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<10}: {v}")
@@ -754,6 +734,7 @@ class EmbyScannerPro:
         print("")
         self.pause()
 
+    # --- 新增功能: 大文件筛选 (>20G) ---
     def run_large_file_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -805,6 +786,7 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
+    # --- 新增功能: 无中字检测 (v2.9.1 修复剧集归类) ---
     def run_no_chinese_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -814,7 +796,10 @@ class EmbyScannerPro:
         if not libs: return
         
         target_libs = [l for l in libs.get('Items', []) if l.get('CollectionType') in ['movies', 'tvshows']]
-        no_chinese_files = []
+        
+        # 结构: { 'LibName': { 'SeriesName/Movie': [ 'S01E01 - xxx' ] } }
+        missing_data = defaultdict(lambda: defaultdict(list))
+        total_missing = 0
         
         for lib in target_libs:
             lib_name = lib.get('Name')
@@ -824,36 +809,54 @@ class EmbyScannerPro:
             fetch_type = 'Episode' if ctype == 'tvshows' else 'Movie'
             params = {
                 'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': fetch_type,
-                'Fields': 'Path,MediaSources,Name,ProductionYear'
+                'Fields': 'Path,MediaSources,Name,ProductionYear,SeriesName,IndexNumber,ParentIndexNumber'
             }
             items = self._fetch_all_items("/emby/Items", params, 10000)
             
             for item in items:
-                if not self.has_chinese_subtitle(item):
-                     no_chinese_files.append({
-                         'name': item.get('Name'),
-                         'year': item.get('ProductionYear'),
-                         'path': item.get('Path'),
-                         'lib': lib_name
-                     })
+                # 如果没有中文字幕 且 没有中文音轨 (v2.9 逻辑)
+                if not self.has_chinese_subtitle(item) and not self.has_chinese_content(item): # double check
+                     total_missing += 1
+                     name = item.get('Name')
+                     
+                     if ctype == 'tvshows':
+                         series_name = item.get('SeriesName', 'Unknown Series')
+                         s = item.get('ParentIndexNumber')
+                         e = item.get('IndexNumber')
+                         if s is not None and e is not None:
+                             ep_str = f"S{s:02d}E{e:02d} - {name}"
+                         else:
+                             ep_str = name
+                         missing_data[lib_name][series_name].append(ep_str)
+                     else:
+                         # 电影直接用名字
+                         movie_name = f"{name} ({item.get('ProductionYear')})"
+                         missing_data[lib_name]['Movies'].append(movie_name)
 
-        if not no_chinese_files:
-            print(f"\n {Colors.GREEN}✅ 所有媒体均包含中文字幕。{Colors.RESET}")
+        if total_missing == 0:
+            print(f"\n {Colors.GREEN}✅ 所有媒体均包含中文字幕/音轨。{Colors.RESET}")
             self.pause(); return
 
-        print(f"\n {Colors.RED}⚠️  发现 {len(no_chinese_files)} 个缺失中文字幕的项目。{Colors.RESET}")
+        print(f"\n {Colors.RED}⚠️  发现 {total_missing} 个缺失中文内容的项目。{Colors.RESET}")
         
-        report_lines = ["🎬 Emby 无中文字幕统计报告", "=" * 80, f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "=" * 80, ""]
+        report_lines = ["🎬 Emby 无中文内容统计报告", "=" * 80, f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "=" * 80, ""]
         
-        current_lib = ""
-        for f in no_chinese_files:
-            if f['lib'] != current_lib:
-                report_lines.append(f"\n📁 {f['lib']}")
-                report_lines.append("-" * 40)
-                current_lib = f['lib']
+        for lib, content in missing_data.items():
+            report_lines.append(f"\n📁 媒体库: {lib}")
+            report_lines.append("-" * 40)
             
-            report_lines.append(f"❌ {f['name']} ({f['year']})")
-            report_lines.append(f"   Path: {f['path']}")
+            # 先打印电影
+            if 'Movies' in content:
+                for m in content['Movies']:
+                    report_lines.append(f"  ❌ {m}")
+                del content['Movies']
+            
+            # 再打印剧集 (按剧名归类)
+            for series, eps in content.items():
+                report_lines.append(f"  📺 {series}")
+                for ep in eps:
+                    report_lines.append(f"     ❌ {ep}")
+                report_lines.append("")
 
         report_name = f"no_chinese_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         report_path = os.path.join(self.data_dir, report_name)
@@ -863,6 +866,7 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
+    # --- 菜单 ---
     def main_menu(self):
         while True:
             self.clear_screen()
