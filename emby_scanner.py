@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.6.1 Ultimate Edition (UI Perfect)
+Emby媒体库重复检测工具 v2.7 Ultimate Edition (Analytics Pro)
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 基础：纯体积查重 + 智能保留 + 用户登录深度删除 + ID熔断保护。
-2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理 + 媒体库透视 + 无中字检测。
-3. 修复：(1) 修正特殊符号(如双引号)导致的表格对齐歪斜 (2) 底部汇总增加【总文件数】显示。
+2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理 + 无中字检测。
+3. 升级：媒体库透视分析 Pro (增加 HDR/杜比视界/Remux/全景声 统计)。
 """
 
 import os
@@ -38,7 +38,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.6.1 Ultimate"
+        self.version = "2.7 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -66,7 +66,7 @@ class EmbyScannerPro:
 {Colors.CYAN}                       __/ |                                        {Colors.RESET}
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
-        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Alignment Fix {Colors.DIM}|{Colors.RESET} All-in-One"
+        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Analytics Pro {Colors.DIM}|{Colors.RESET} HDR/DV/Atmos"
         print(logo)
         print(info_bar.center(80))
         print(f"\n{Colors.DIM}" + "—" * 65 + f"{Colors.RESET}\n")
@@ -168,7 +168,7 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.6.1'}
+                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.7'}
                     return True
             except: pass
         return False
@@ -246,23 +246,20 @@ class EmbyScannerPro:
         
         if 'HDR' in str(video_streams).upper(): info.append(f"{Colors.YELLOW}HDR{Colors.RESET}")
         if 'DOLBY' in str(video_streams).upper() or 'DV' in str(video_streams).upper(): info.append(f"{Colors.CYAN}DV{Colors.RESET}")
-        if self.has_chinese_subtitle(item): info.append(f"{Colors.GREEN}中字{Colors.RESET}")
-
+        
+        if self.has_chinese_subtitle(item):
+            info.append(f"{Colors.GREEN}中字{Colors.RESET}")
+            
         return " | ".join(info)
 
     def get_clean_info(self, info_str):
         return re.sub(r'\x1b\[[0-9;]*m', '', info_str)
 
-    # --- UI 辅助：修复对齐问题 ---
     def get_display_width(self, text):
         width = 0
         for char in text:
-            # 修复核心：不将 'A' (Ambiguous, 如 “”) 视为宽字符，仅 F/W 视为宽字符
-            # 这能适配大多数现代终端对中文标点和 Smart Quotes 的渲染
-            if unicodedata.east_asian_width(char) in ('F', 'W'): 
-                width += 2
-            else:
-                width += 1
+            if unicodedata.east_asian_width(char) in ('F', 'W', 'A'): width += 2
+            else: width += 1
         return width
 
     def pad_text(self, text, width):
@@ -289,7 +286,7 @@ class EmbyScannerPro:
             start_index += len(items)
         return all_items
 
-    # --- 功能 1: 重复检测 (增加总文件数统计) ---
+    # --- 功能 1: 重复检测 ---
     def run_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -315,7 +312,7 @@ class EmbyScannerPro:
         self.last_scan_results = {}
         lib_summaries = [] 
         grand_total_bytes = 0
-        grand_total_count = 0 # 全局文件数统计
+        grand_total_count = 0 
 
         for lib in target_libs:
             lib_name = lib.get('Name')
@@ -384,13 +381,12 @@ class EmbyScannerPro:
                 status = f"{Colors.GREEN}完美{Colors.RESET}"
                 dup_str = f"{Colors.GREEN}0 B{Colors.RESET}"
 
-            sys.stdout.write("\r") 
+            sys.stdout.write("\r" + " "*50 + "\r") 
             row_str = f" │ {self.pad_text(lib_name, W_NAME)} │ {self.pad_text(count_str, W_COUNT)} │ {self.pad_text(size_str, W_SIZE)} │ {self.pad_text(dup_str, W_DUP)} │ {self.pad_text(status, W_STAT)} │"
             print(row_str)
 
         print(f" {Colors.DIM}└" + "─"*W_NAME + "┴" + "─"*W_COUNT + "┴" + "─"*W_SIZE + "┴" + "─"*W_DUP + "┴" + "─"*W_STAT + "┘" + f"{Colors.RESET}")
         
-        # 底部汇总：增加总文件数显示
         print(f"\n {Colors.CYAN}📊 媒体库总容量: {self.format_size(grand_total_bytes)}  {Colors.DIM}|{Colors.RESET}  {Colors.CYAN}总文件数: {grand_total_count}{Colors.RESET}")
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -635,20 +631,23 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
-    # --- 功能 5: 媒体库透视分析 ---
+    # --- 功能 5: 媒体库透视分析 (Analytics Pro - Paging Fixed) ---
     def run_analytics(self):
         self.clear_screen()
         self.print_banner()
         print(f" {Colors.YELLOW}📊 正在分析媒体库...{Colors.RESET}")
         
         params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'MediaSources,Path'}
-        all_items = self._fetch_all_items("/emby/Items", params, limit_per_page=10000)
+        all_items = self._fetch_all_items("/emby/Items", params, limit_per_page=20000)
         
         if not all_items: return
 
         stats = {
             'Resolution': defaultdict(int),
             'VideoCodec': defaultdict(int),
+            'SourceType': defaultdict(int), 
+            'DynamicRange': defaultdict(int), 
+            'AudioTech': defaultdict(int),
             'TotalCount': 0
         }
         
@@ -659,7 +658,19 @@ class EmbyScannerPro:
             sources = item.get('MediaSources', [])
             if not sources: continue
             
-            for stream in sources[0].get('MediaStreams', []):
+            source = sources[0]
+            path = item.get('Path', '').upper()
+            name = item.get('Name', '').upper()
+
+            # 1. Source Type
+            if 'REMUX' in path or 'REMUX' in name: stats['SourceType']['Remux'] += 1
+            elif 'BLURAY' in path or 'BLU-RAY' in path: stats['SourceType']['BluRay'] += 1
+            elif 'WEB-DL' in path or 'WEBDL' in path: stats['SourceType']['WEB-DL'] += 1
+            elif 'WEBRIP' in path: stats['SourceType']['WEBRip'] += 1
+            elif 'ISO' in path or path.endswith('.ISO'): stats['SourceType']['ISO'] += 1
+            else: stats['SourceType']['Other'] += 1
+            
+            for stream in source.get('MediaStreams', []):
                 if stream.get('Type') == 'Video':
                     w = stream.get('Width', 0)
                     h = stream.get('Height', 0)
@@ -670,16 +681,48 @@ class EmbyScannerPro:
                     stats['Resolution'][res] += 1
                     codec = stream.get('Codec', 'Unknown').upper()
                     stats['VideoCodec'][codec] += 1
+                    
+                    disp = stream.get('DisplayTitle', '').upper()
+                    title = stream.get('Title', '').upper()
+                    vr = stream.get('VideoRange', '').upper()
+                    if 'DOLBY VISION' in disp or 'DV' in title or 'DOVI' in vr: stats['DynamicRange']['Dolby Vision'] += 1
+                    elif 'HDR' in vr or 'HDR' in disp: stats['DynamicRange']['HDR10/+'] += 1
+                    else: stats['DynamicRange']['SDR'] += 1
                     break
+
+            # Audio Analysis
+            audio_streams = [s for s in source.get('MediaStreams', []) if s.get('Type') == 'Audio']
+            found_adv = False
+            for a in audio_streams:
+                t = (a.get('DisplayTitle') or '').upper() + (a.get('Codec') or '').upper() + (a.get('Profile') or '').upper()
+                if 'ATMOS' in t: stats['AudioTech']['Dolby Atmos'] += 1; found_adv = True; break
+                if 'DTS-X' in t or 'DTS:X' in t: stats['AudioTech']['DTS:X'] += 1; found_adv = True; break
+                if 'TRUEHD' in t: stats['AudioTech']['TrueHD'] += 1; found_adv = True; break
+                if 'DTS-HD' in t: stats['AudioTech']['DTS-HD MA'] += 1; found_adv = True; break
+            if not found_adv and audio_streams:
+                codec = audio_streams[0].get('Codec', 'Unknown').upper()
+                stats['AudioTech'][codec] += 1
         
         print(f"\n {Colors.BOLD}=== 媒体库统计 (共 {stats['TotalCount']} 个视频) ==={Colors.RESET}")
-        print(f"\n {Colors.CYAN}📺 分辨率分布:{Colors.RESET}")
+        print(f"\n {Colors.CYAN}📺 画质分布:{Colors.RESET}")
         for k, v in sorted(stats['Resolution'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<10}: {v}")
             
-        print(f"\n {Colors.MAGENTA}🎞️  编码分布:{Colors.RESET}")
+        print(f"\n {Colors.YELLOW}🌈 动态范围:{Colors.RESET}")
+        for k, v in sorted(stats['DynamicRange'].items(), key=lambda x: x[1], reverse=True):
+            print(f"   {k:<15}: {v}")
+
+        print(f"\n {Colors.MAGENTA}🎞️  编码格式:{Colors.RESET}")
         for k, v in sorted(stats['VideoCodec'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<10}: {v}")
+        
+        print(f"\n {Colors.BLUE}💿 版本来源:{Colors.RESET}")
+        for k, v in sorted(stats['SourceType'].items(), key=lambda x: x[1], reverse=True):
+            print(f"   {k:<10}: {v}")
+
+        print(f"\n {Colors.GREEN}🔊 音频技术:{Colors.RESET}")
+        for k, v in sorted(stats['AudioTech'].items(), key=lambda x: x[1], reverse=True)[:8]:
+            print(f"   {k:<15}: {v}")
             
         print("")
         self.pause()
