@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.9.9 Ultimate Edition (Metadata Enhanced)
+Emby媒体库重复检测工具 v3.0 Ultimate Edition (Final Stable)
 GitHub: https://github.com/huanhq99/emby-scanner
-核心功能: 
+核心功能 (All-in-One):
 1. 基础：纯体积查重 + 智能保留 + 用户登录深度删除 + ID熔断保护。
-2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理 + 媒体库透视。
-3. 修复：无中字检测逻辑大升级 —— 增加【元数据溯源】，只要影片产地是中华区或母语是中文，直接判定为有中文，彻底解决国产资源被误杀的问题。
+2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理 + 媒体库透视 + 无中字检测。
+3. 修复：移除不严谨的"汉字即中文"逻辑，回归【元数据+流信息】精准检测；修复 AttributeError。
 """
 
 import os
@@ -38,7 +38,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.9.9 Ultimate"
+        self.version = "3.0 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -66,7 +66,7 @@ class EmbyScannerPro:
 {Colors.CYAN}                       __/ |                                        {Colors.RESET}
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
-        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Metadata Source Check {Colors.DIM}|{Colors.RESET} All-in-One"
+        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Final Stable {Colors.DIM}|{Colors.RESET} All-in-One"
         print(logo)
         print(info_bar.center(80))
         print(f"\n{Colors.DIM}" + "—" * 65 + f"{Colors.RESET}\n")
@@ -200,7 +200,7 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.9.9'}
+                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/3.0'}
                     return True
             except: pass
         return False
@@ -238,14 +238,14 @@ class EmbyScannerPro:
             size_bytes /= 1024
         return f"{size_bytes:.2f} PB"
 
-    # --- 核心: 智能中文内容检测 (流信息 + 文件名 + 元数据溯源) ---
+    # --- 核心: 智能中文内容检测 ---
     def has_chinese_content(self, item):
         # 1. 查户口：检查 Emby 元数据 (OriginalLanguage / ProductionLocations)
-        # 这是解决"无标签国产片"最根本的方法
+        # 只要元数据承认它是中文的，我们就信它
         orig_lang = (item.get('OriginalLanguage') or '').lower()
         if orig_lang in ['zh', 'chi', 'zho', 'yue', 'wuu', 'cn', 'zh-cn', 'zh-tw']:
             return True
-            
+        
         locations = item.get('ProductionLocations', [])
         for loc in locations:
             if loc in ['China', 'Hong Kong', 'Taiwan', "People's Republic of China"]:
@@ -257,17 +257,21 @@ class EmbyScannerPro:
             for source in media_sources:
                 for stream in source.get('MediaStreams', []):
                     stype = stream.get('Type')
+                    # 重点：检查音频(Audio) -> 解决国语配音无字幕的误报
                     if stype in ['Subtitle', 'Audio']:
                         lang = (stream.get('Language') or '').lower()
                         title = (stream.get('Title') or '').lower()
                         display_title = (stream.get('DisplayTitle') or '').lower()
                         
+                        # ISO 代码检测
                         if lang in ['chi', 'zho', 'chn', 'zh', 'yue', 'wuu']: return True
+                        # 关键词检测
                         keywords = ['chinese', '中文', '简', '繁', 'chs', 'cht', 'hanzi', '中字', 'zh-cn', 'zh-tw', '国语', '普通话', '粤语', 'cantonese', 'mandarin']
                         for kw in keywords:
                             if kw in title or kw in display_title: return True
         
-        # 3. 查文件名 (兜底)
+        # 3. 查文件名关键词 (兜底)
+        # 如果文件名明确写了"国语"、"中配"等，即使元数据缺失也认
         path = (item.get('Path') or '').lower()
         name = (item.get('Name') or '').lower()
         filename_keywords = ['国语', '中配', '台配', '粤语', 'chinese', 'cantonese', 'mandarin', 'cmn', 'dubbed']
@@ -296,10 +300,9 @@ class EmbyScannerPro:
         if 'HDR' in str(video_streams).upper(): info.append(f"{Colors.YELLOW}HDR{Colors.RESET}")
         if 'DOLBY' in str(video_streams).upper() or 'DV' in str(video_streams).upper(): info.append(f"{Colors.CYAN}DV{Colors.RESET}")
         
-        # 显示“国语/中字”
-        if self.has_chinese_content(item): 
-            info.append(f"{Colors.GREEN}中字/国语{Colors.RESET}")
-            
+        # 调用新方法
+        if self.has_chinese_content(item): info.append(f"{Colors.GREEN}中字/国语{Colors.RESET}")
+        
         return " | ".join(info)
 
     def get_clean_info(self, info_str):
@@ -350,7 +353,6 @@ class EmbyScannerPro:
             sys.stdout.flush()
             
             fetch_type = 'Episode' if ctype == 'tvshows' else 'Movie'
-            # 需要增加 OriginalLanguage 和 ProductionLocations 字段供后续判断
             params = {
                 'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': fetch_type,
                 'Fields': 'Path,MediaSources,Size,ProductionYear,SeriesName,IndexNumber,ParentIndexNumber,OriginalLanguage,ProductionLocations,VideoRange,VideoRangeType'
@@ -379,12 +381,8 @@ class EmbyScannerPro:
                 else:
                     key = size
                 groups[key].append({
-                    'id': item.get('Id'),
-                    'name': name,
-                    'path': item.get('Path'),
-                    'size': size,
-                    'info': self.get_video_info(item),
-                    'year': item.get('ProductionYear')
+                    'id': item.get('Id'), 'name': name, 'path': item.get('Path'),
+                    'size': size, 'info': self.get_video_info(item), 'year': item.get('ProductionYear')
                 })
 
             dups = {k: v for k, v in groups.items() if len(v) > 1}
@@ -657,10 +655,11 @@ class EmbyScannerPro:
         self.print_banner()
         print(f" {Colors.YELLOW}📊 正在分析媒体库...{Colors.RESET}")
         
-        params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'MediaSources,Path', 'Limit': 1000000}
-        data = self._request("/emby/Items", params)
-        if not data: return
+        params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'MediaSources,Path'}
+        all_items = self._fetch_all_items("/emby/Items", params, limit_per_page=10000)
         
+        if not all_items: return
+
         stats = {
             'Resolution': defaultdict(int),
             'SourceType': defaultdict(int), 
@@ -672,7 +671,7 @@ class EmbyScannerPro:
         
         print(f"\n 🔄 正在统计元数据...")
         
-        for item in data.get('Items', []):
+        for item in all_items:
             stats['TotalCount'] += 1
             sources = item.get('MediaSources', [])
             if not sources: continue
@@ -778,7 +777,7 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
-    # --- 新增功能: 无中字检测 ---
+    # --- 新增功能: 无中字检测 (Fixed) ---
     def run_no_chinese_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -797,9 +796,10 @@ class EmbyScannerPro:
             
             fetch_type = 'Episode' if ctype == 'tvshows' else 'Movie'
             params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': fetch_type, 'Fields': 'Path,MediaSources,Name,ProductionYear,SeriesName,IndexNumber,ParentIndexNumber,OriginalLanguage,ProductionLocations'}
-            items = self._fetch_all_items("/emby/Items", params, 5000)
+            items = self._fetch_all_items("/emby/Items", params, 2000)
             
             for item in items:
+                # v3.0 Fixed: use has_chinese_content (Smart Check)
                 if not self.has_chinese_content(item):
                      name = item.get('Name')
                      if ctype == 'tvshows':
@@ -842,7 +842,7 @@ class EmbyScannerPro:
         report_path = os.path.join(self.data_dir, report_name)
         try:
             with open(report_path, 'w', encoding='utf-8') as f: f.write('\n'.join(report_lines))
-            print(f" 📄 报告已生成: {Colors.BOLD}{report_path}{Colors.RESET}")
+            print(f" 📄 报告已生成: {Colors.BOLD}{report_name}{Colors.RESET}")
         except: pass
         self.pause()
 
@@ -862,7 +862,8 @@ class EmbyScannerPro:
             print(f" {Colors.BLUE}[8]{Colors.RESET} 🐘  大文件筛选 (>20GB)") 
             print(f" {Colors.BLUE}[9]{Colors.RESET} 🈯  无中字检测 (No Chinese)")
             print(f"\n {Colors.BOLD}--- 系统设置 ---{Colors.RESET}")
-            print(f" {Colors.DIM}[2] 配置服务器   [3] 查看报告   [4] 重置数据   [0] 退出{Colors.RESET}\n")
+            print(f" {Colors.DIM}[2] 配置服务器   [3] 查看报告   [4] 重置数据   [0] 退出{Colors.RESET}")
+            print("")
             
             c = self.get_user_input("请选择").strip()
             if c=='1': self.run_scanner() if self.server_url else print("请先配置") or self.pause()
