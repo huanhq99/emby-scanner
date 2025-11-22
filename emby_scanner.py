@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.9.5 Ultimate Edition (Hotfix)
+Emby媒体库重复检测工具 v2.9.6 Ultimate Edition (Final Integrated)
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 基础：纯体积查重 + 智能保留 + 用户登录深度删除 + ID熔断保护。
-2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理 + 媒体库透视。
-3. 修复：彻底修复无中字检测功能的 AttributeError，移除废弃的方法调用。
+2. 扩展：大文件筛选 + 剧集缺集检查 + 空文件夹清理 + 媒体库透视(Pro) + 无中字检测(Smart)。
+3. 整合：集成了 UI表格对齐修复、总容量统计、AttributeError修复、管道输入支持等所有补丁。
 """
 
 import os
@@ -38,7 +38,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.9.5 Ultimate"
+        self.version = "2.9.6 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -66,10 +66,21 @@ class EmbyScannerPro:
 {Colors.CYAN}                       __/ |                                        {Colors.RESET}
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
-        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Hotfix {Colors.DIM}|{Colors.RESET} All-in-One"
+        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Final Integrated {Colors.DIM}|{Colors.RESET} All-in-One"
         print(logo)
         print(info_bar.center(80))
         print(f"\n{Colors.DIM}" + "—" * 65 + f"{Colors.RESET}\n")
+
+    # --- 输入流修复：支持管道 ---
+    def _read_input(self):
+        try:
+            if not sys.stdin.isatty():
+                with open('/dev/tty', 'r') as tty:
+                    return tty.readline().strip()
+            else:
+                return sys.stdin.readline().strip()
+        except Exception:
+            return input().strip()
 
     def get_user_input(self, prompt, default=""):
         full_prompt = f" {Colors.CYAN}▶{Colors.RESET} {Colors.BOLD}{prompt}{Colors.RESET}"
@@ -79,7 +90,7 @@ class EmbyScannerPro:
         try:
             sys.stdout.write(full_prompt)
             sys.stdout.flush()
-            user_input = sys.stdin.readline().strip()
+            user_input = self._read_input()
             return user_input if user_input else default
         except (EOFError, KeyboardInterrupt):
             sys.exit(0)
@@ -87,7 +98,11 @@ class EmbyScannerPro:
     def pause(self):
         print(f"\n {Colors.DIM}Press {Colors.GREEN}[Enter]{Colors.RESET}{Colors.DIM} to continue...{Colors.RESET}", end="")
         sys.stdout.flush()
-        sys.stdin.readline()
+        try:
+            if not sys.stdin.isatty():
+                with open('/dev/tty', 'r') as tty: tty.readline()
+            else: sys.stdin.readline()
+        except: pass
 
     def _request(self, endpoint, params=None, method='GET', auth_header=None, post_data=None):
         url = f"{self.server_url}{endpoint}"
@@ -114,8 +129,7 @@ class EmbyScannerPro:
                     time.sleep(2 * (attempt + 1))
                     continue
                 else:
-                    if hasattr(e, 'code') and e.code != 404:
-                         pass 
+                    if hasattr(e, 'code') and e.code != 404: pass 
                     return None
             except Exception:
                 return None
@@ -126,14 +140,15 @@ class EmbyScannerPro:
         print(f"{Colors.DIM}" + "-" * 40 + f"{Colors.RESET}")
         
         username = self.get_user_input("用户名")
+        print(f" {Colors.CYAN}▶{Colors.RESET} {Colors.BOLD}密码{Colors.RESET}: ", end="")
+        sys.stdout.flush()
         try:
-            if sys.stdin.isatty():
-                import getpass
-                password = getpass.getpass(f" {Colors.CYAN}▶{Colors.RESET} {Colors.BOLD}密码{Colors.RESET}: ")
+            if not sys.stdin.isatty():
+                 with open('/dev/tty', 'r') as tty: password = tty.readline().strip()
             else:
-                password = self.get_user_input("密码")
+                password = getpass.getpass("")
         except:
-            password = self.get_user_input("密码")
+             password = self.get_user_input("密码")
 
         print(f"\n 🔄 正在验证...")
         auth_data = {"Username": username, "Pw": password}
@@ -168,7 +183,7 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.9.5'}
+                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.9.6'}
                     return True
             except: pass
         return False
@@ -206,25 +221,21 @@ class EmbyScannerPro:
             size_bytes /= 1024
         return f"{size_bytes:.2f} PB"
 
-    # --- 核心: 智能中文内容检测 (含音轨) ---
+    # --- 核心: 智能中文内容检测 ---
     def has_chinese_content(self, item):
         media_sources = item.get('MediaSources', [])
         if not media_sources: return False
-        
         for source in media_sources:
             for stream in source.get('MediaStreams', []):
                 stype = stream.get('Type')
                 if stype in ['Subtitle', 'Audio']:
                     lang = (stream.get('Language') or '').lower()
                     title = (stream.get('Title') or '').lower()
-                    display_title = (stream.get('DisplayTitle') or '').lower()
-                    
-                    # ISO 代码检测
+                    display = (stream.get('DisplayTitle') or '').lower()
                     if lang in ['chi', 'zho', 'chn', 'zh', 'yue', 'wuu']: return True
-                    # 关键词检测
                     keywords = ['chinese', '中文', '简', '繁', 'chs', 'cht', 'hanzi', '中字', 'zh-cn', 'zh-tw', '国语', '普通话', '粤语', 'cantonese', 'mandarin']
                     for kw in keywords:
-                        if kw in title or kw in display_title: return True
+                        if kw in title or kw in display: return True
         return False
 
     def get_video_info(self, item):
@@ -257,7 +268,8 @@ class EmbyScannerPro:
     def get_display_width(self, text):
         width = 0
         for char in text:
-            if unicodedata.east_asian_width(char) in ('F', 'W', 'A'): width += 2
+            # 修复中文对齐: F/W 算2宽
+            if unicodedata.east_asian_width(char) in ('F', 'W'): width += 2
             else: width += 1
         return width
 
@@ -316,8 +328,7 @@ class EmbyScannerPro:
         for lib in target_libs:
             lib_name = lib.get('Name')
             ctype = lib.get('CollectionType')
-            loading_txt = f"{Colors.DIM}Scanning...{Colors.RESET}"
-            sys.stdout.write(f" │ {self.pad_text(lib_name, W_NAME)} │ {self.pad_text(loading_txt, W_COUNT)} ...\r")
+            sys.stdout.write(f" │ {self.pad_text(lib_name, W_NAME)} │ {self.pad_text('Scanning...', W_COUNT)} ...\r")
             sys.stdout.flush()
             
             fetch_type = 'Episode' if ctype == 'tvshows' else 'Movie'
@@ -380,7 +391,7 @@ class EmbyScannerPro:
                 status = f"{Colors.GREEN}完美{Colors.RESET}"
                 dup_str = f"{Colors.GREEN}0 B{Colors.RESET}"
 
-            sys.stdout.write("\r" + " "*50 + "\r") 
+            sys.stdout.write("\r" + " "*80 + "\r") 
             row_str = f" │ {self.pad_text(lib_name, W_NAME)} │ {self.pad_text(count_str, W_COUNT)} │ {self.pad_text(size_str, W_SIZE)} │ {self.pad_text(dup_str, W_DUP)} │ {self.pad_text(status, W_STAT)} │"
             print(row_str)
 
@@ -575,9 +586,7 @@ class EmbyScannerPro:
             status = f"{Colors.YELLOW}有缺集{Colors.RESET}" if lib_missing_count > 0 else f"{Colors.GREEN}完整{Colors.RESET}"
             missing_str = f"{Colors.RED}{lib_missing_count} 集{Colors.RESET}" if lib_missing_count > 0 else "0"
             sys.stdout.write("\r")
-            row_str = (
-                f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 14)} │ {self.pad_text(missing_str, 17)} │ {self.pad_text(status, 12)} │"
-            )
+            row_str = f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 14)} │ {self.pad_text(missing_str, 17)} │ {self.pad_text(status, 12)} │"
             print(row_str)
 
         print(f" {Colors.DIM}└" + "─"*22 + "┴" + "─"*14 + "┴" + "─"*17 + "┴" + "─"*12 + "┘" + f"{Colors.RESET}")
@@ -643,7 +652,6 @@ class EmbyScannerPro:
 
         stats = {
             'Resolution': defaultdict(int),
-            'VideoCodec': defaultdict(int),
             'SourceType': defaultdict(int), 
             'DynamicRange': defaultdict(int), 
             'AudioTech': defaultdict(int),
@@ -662,7 +670,7 @@ class EmbyScannerPro:
             path = item.get('Path', '').upper()
             name = item.get('Name', '').upper()
 
-            # 1. Source Type
+            # Source Type
             if 'REMUX' in path or 'REMUX' in name: stats['SourceType']['Remux'] += 1
             elif 'BLURAY' in path or 'BLU-RAY' in path: stats['SourceType']['BluRay'] += 1
             elif 'WEB-DL' in path or 'WEBDL' in path: stats['SourceType']['WEB-DL'] += 1
@@ -670,7 +678,7 @@ class EmbyScannerPro:
             elif 'ISO' in path or path.endswith('.ISO'): stats['SourceType']['ISO'] += 1
             else: stats['SourceType']['Other'] += 1
             
-            # 2. Release Group
+            # Release Group
             try:
                 fname = os.path.basename(item.get('Path', ''))
                 fname_no_ext = os.path.splitext(fname)[0]
@@ -689,8 +697,6 @@ class EmbyScannerPro:
                     elif w >= 1200 or h >= 700: res = "720P"
                     else: res = "SD"
                     stats['Resolution'][res] += 1
-                    codec = stream.get('Codec', 'Unknown').upper()
-                    stats['VideoCodec'][codec] += 1
                     
                     disp = stream.get('DisplayTitle', '').upper()
                     title = stream.get('Title', '').upper()
@@ -716,10 +722,6 @@ class EmbyScannerPro:
         print(f"\n {Colors.YELLOW}🌈 动态范围:{Colors.RESET}")
         for k, v in sorted(stats['DynamicRange'].items(), key=lambda x: x[1], reverse=True):
             print(f"   {k:<15}: {v}")
-
-        print(f"\n {Colors.MAGENTA}🎞️  编码格式:{Colors.RESET}")
-        for k, v in sorted(stats['VideoCodec'].items(), key=lambda x: x[1], reverse=True):
-            print(f"   {k:<10}: {v}")
         
         print(f"\n {Colors.BLUE}💿 版本来源:{Colors.RESET}")
         for k, v in sorted(stats['SourceType'].items(), key=lambda x: x[1], reverse=True):
@@ -788,7 +790,7 @@ class EmbyScannerPro:
         except: pass
         self.pause()
 
-    # --- 新增功能: 无中字检测 (Paging + Fixed) ---
+    # --- 新增功能: 无中字检测 (Paging + Grouping + Fix) ---
     def run_no_chinese_scanner(self):
         self.clear_screen()
         self.print_banner()
@@ -798,7 +800,10 @@ class EmbyScannerPro:
         if not libs: return
         
         target_libs = [l for l in libs.get('Items', []) if l.get('CollectionType') in ['movies', 'tvshows']]
-        no_chinese_files = []
+        
+        # 结构: { 'LibName': { 'SeriesName': [ 'S01E01 - xxx' ], 'Movies': [ 'MovieName' ] } }
+        missing_data = defaultdict(lambda: {'Movies': [], 'Series': defaultdict(list)})
+        total_missing = 0
         
         for lib in target_libs:
             lib_name = lib.get('Name')
@@ -814,31 +819,48 @@ class EmbyScannerPro:
             items = self._fetch_all_items("/emby/Items", params, limit_per_page=2000)
             
             for item in items:
-                if not self.has_chinese_content(item): 
-                     no_chinese_files.append({
-                         'name': item.get('Name'),
-                         'year': item.get('ProductionYear'),
-                         'path': item.get('Path'),
-                         'lib': lib_name
-                     })
+                # 修复点：正确调用 has_chinese_content
+                if not self.has_chinese_content(item):
+                     total_missing += 1
+                     name = item.get('Name')
+                     
+                     if ctype == 'tvshows':
+                         series_name = item.get('SeriesName', 'Unknown Series')
+                         s = item.get('ParentIndexNumber')
+                         e = item.get('IndexNumber')
+                         if s is not None and e is not None:
+                             ep_str = f"S{s:02d}E{e:02d} - {name}"
+                         else:
+                             ep_str = name
+                         missing_data[lib_name]['Series'][series_name].append(ep_str)
+                     else:
+                         movie_name = f"{name} ({item.get('ProductionYear')})"
+                         missing_data[lib_name]['Movies'].append(movie_name)
 
-        if not no_chinese_files:
+        if total_missing == 0:
             print(f"\n {Colors.GREEN}✅ 所有媒体均包含中文字幕/音轨。{Colors.RESET}")
             self.pause(); return
 
-        print(f"\n {Colors.RED}⚠️  发现 {len(no_chinese_files)} 个缺失中文内容的项目。{Colors.RESET}")
+        print(f"\n {Colors.RED}⚠️  发现 {total_missing} 个缺失中文内容的项目。{Colors.RESET}")
         
         report_lines = ["🎬 Emby 无中文内容统计报告", "=" * 80, f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "=" * 80, ""]
         
-        current_lib = ""
-        for f in no_chinese_files:
-            if f['lib'] != current_lib:
-                report_lines.append(f"\n📁 {f['lib']}")
-                report_lines.append("-" * 40)
-                current_lib = f['lib']
+        for lib, content in missing_data.items():
+            report_lines.append(f"\n📁 媒体库: {lib}")
+            report_lines.append("-" * 40)
             
-            report_lines.append(f"❌ {f['name']} ({f['year']})")
-            report_lines.append(f"   Path: {f['path']}")
+            if content['Movies']:
+                report_lines.append(" [电影]")
+                for m in sorted(content['Movies']):
+                    report_lines.append(f"  ❌ {m}")
+            
+            if content['Series']:
+                report_lines.append(" [剧集]")
+                for series, eps in sorted(content['Series'].items()):
+                    report_lines.append(f"  📺 {series}")
+                    for ep in sorted(eps):
+                        report_lines.append(f"     ❌ {ep}")
+                    report_lines.append("")
 
         report_name = f"no_chinese_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         report_path = os.path.join(self.data_dir, report_name)
