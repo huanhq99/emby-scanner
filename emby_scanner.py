@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v2.11 Ultimate Edition (Smart-TV Fix)
+Emby媒体库重复检测工具 v3.7 Ultimate Edition (Dual Strategy)
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
-1. 剧集查重(新): 只要【剧名+季+集】一致即算重复，忽略因字幕/压制组导致的文件微小差异，专治同集洗版。
-2. 电影查重(稳): 保持【纯体积】匹配，只有字节完全一致才算重复。
-3. 基础功能: 模拟登录深度删除 + 手动精选 + 缺集检查 + ID熔断保护。
+1. 双重查重模式：
+   - [1] 严格体积模式：仅当文件字节数完全一致时，才视为重复。(防误删，最安全)
+   - [2] 同集优先模式：只要是【同一集】(SxxExx)，无论体积大小/文件名差异，均视为重复。(专治同集洗版)
+2. 智能清理：
+   - 剧集：同集模式下，自动保留【体积最大】且【文件名最长】的文件。
+   - 电影：自动保留【文件名最长】的文件。
+3. 功能全集：登录深度删除 + 手动精选 + 缺集检查 + 媒体库透视。
 """
 
 import os
@@ -38,7 +42,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "2.11 Ultimate"
+        self.version = "3.7 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -47,8 +51,8 @@ class EmbyScannerPro:
         self.user_id = ""
         self.access_token = ""
         self.last_scan_results = {} 
-        # 记录库类型，用于区分清理策略
         self.lib_types = {}
+        self.scan_mode = "strict" # strict / loose
 
         home_dir = os.environ.get('HOME')
         self.script_dir = home_dir if home_dir else os.path.expanduser('~')
@@ -68,12 +72,12 @@ class EmbyScannerPro:
 {Colors.CYAN}                       __/ |                                        {Colors.RESET}
 {Colors.CYAN}                      |___/                                         {Colors.RESET}
         """
-        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Smart-TV Logic {Colors.DIM}|{Colors.RESET} All-in-One"
+        info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Dual Strategy {Colors.DIM}|{Colors.RESET} All-in-One"
         print(logo)
         print(info_bar.center(80))
         print(f"\n{Colors.DIM}" + "—" * 65 + f"{Colors.RESET}\n")
 
-    # --- 输入流处理 ---
+    # --- 输入流 ---
     def _read_input(self):
         try:
             if not sys.stdin.isatty():
@@ -202,7 +206,7 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/2.11'}
+                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/3.7'}
                     return True
             except: pass
         return False
@@ -240,7 +244,24 @@ class EmbyScannerPro:
             size_bytes /= 1024
         return f"{size_bytes:.2f} PB"
 
-    # --- 智能中文内容检测 ---
+    def get_clean_info(self, info_str):
+        return re.sub(r'\x1b\[[0-9;]*m', '', info_str)
+
+    def get_display_width(self, text):
+        width = 0
+        for char in text:
+            if unicodedata.east_asian_width(char) in ('F', 'W', 'A'): width += 2
+            else: width += 1
+        return width
+
+    def pad_text(self, text, width):
+        clean_text = self.get_clean_info(text)
+        d_width = self.get_display_width(clean_text)
+        padding = width - d_width
+        if padding > 0: return text + " " * padding
+        return text
+    
+    # --- 中文检测 ---
     def has_chinese_content(self, item):
         orig_lang = (item.get('OriginalLanguage') or '').lower()
         if orig_lang in ['zh', 'chi', 'zho', 'yue', 'wuu', 'cn', 'zh-cn', 'zh-tw']: return True
@@ -255,11 +276,11 @@ class EmbyScannerPro:
                     if stype in ['Subtitle', 'Audio']:
                         lang = (stream.get('Language') or '').lower()
                         title = (stream.get('Title') or '').lower()
-                        display = (stream.get('DisplayTitle') or '').lower()
+                        display_title = (stream.get('DisplayTitle') or '').lower()
                         if lang in ['chi', 'zho', 'chn', 'zh', 'yue', 'wuu']: return True
                         keywords = ['chinese', '中文', '简', '繁', 'chs', 'cht', 'hanzi', '中字', 'zh-cn', 'zh-tw', '国语', '普通话', '粤语', 'cantonese', 'mandarin']
                         for kw in keywords:
-                            if kw in title or kw in display: return True
+                            if kw in title or kw in display_title: return True
         path = (item.get('Path') or '').lower()
         name = (item.get('Name') or '').lower()
         filename_keywords = ['国语', '中配', '台配', '粤语', 'chinese', 'cantonese', 'mandarin', 'cmn', 'dubbed']
@@ -268,6 +289,7 @@ class EmbyScannerPro:
         if re.search(r'[\u4e00-\u9fff]', name): return True 
         return False
 
+    # --- v3.3 增强: 提取制作组信息 ---
     def get_video_info(self, item, source):
         info = []
         video_streams = [s for s in source.get('MediaStreams', []) if s.get('Type') == 'Video']
@@ -285,7 +307,7 @@ class EmbyScannerPro:
         if 'HDR' in str(video_streams).upper(): info.append(f"{Colors.YELLOW}HDR{Colors.RESET}")
         if 'DOLBY' in str(video_streams).upper() or 'DV' in str(video_streams).upper(): info.append(f"{Colors.CYAN}DV{Colors.RESET}")
         if self.has_chinese_content(item): info.append(f"{Colors.GREEN}中字/国语{Colors.RESET}")
-        
+
         path = source.get('Path', '')
         if path:
             fname = os.path.basename(path)
@@ -294,42 +316,39 @@ class EmbyScannerPro:
                 group = fname_no_ext.split('-')[-1].strip()
                 if 1 < len(group) < 15 and not group.isdigit() and not re.match(r'^S\d+E\d+', group, re.IGNORECASE):
                     info.append(f"{Colors.BLUE}{group}{Colors.RESET}")
+
         return " | ".join(info)
 
-    def get_clean_info(self, info_str):
-        return re.sub(r'\x1b\[[0-9;]*m', '', info_str)
-
-    def get_display_width(self, text):
-        width = 0
-        for char in text:
-            if unicodedata.east_asian_width(char) in ('F', 'W', 'A'): width += 2
-            else: width += 1
-        return width
-
-    def pad_text(self, text, width):
-        clean_text = self.get_clean_info(text)
-        d_width = self.get_display_width(clean_text)
-        padding = width - d_width
-        if padding > 0: return text + " " * padding
-        return text
-
-    # --- 功能 1: 重复检测 (v2.11 智能逻辑) ---
+    # --- 功能 1: 重复检测 (v3.2 Smart TV Fix) ---
     def run_scanner(self):
         self.clear_screen()
         self.print_banner()
-        print(f" {Colors.YELLOW}🚀 正在扫描媒体库 (查重模式)...{Colors.RESET}")
+        print(f" {Colors.YELLOW}🚀 正在扫描媒体库 (查重模式)...{Colors.RESET}\n")
+        
+        # 策略选择
+        print(f" 请选择查重策略:")
+        print(f"   {Colors.GREEN}[1] 严格体积模式{Colors.RESET} (推荐) -> 仅当字节完全一致时算重复 (防误删)")
+        print(f"   {Colors.MAGENTA}[2] 同集优先模式{Colors.RESET} (洗版) -> 只要是同一集，不管大小都算重复")
+        
+        st = self.get_user_input("选择模式", default="1").strip()
+        self.scan_mode = "loose" if st == '2' else "strict"
         
         libs = self._request("/emby/Library/MediaFolders")
         if not libs: return
 
         target_libs = [l for l in libs.get('Items', []) if l.get('CollectionType') in ['movies', 'tvshows']]
         
-        W_NAME, W_COUNT, W_SIZE, W_DUP, W_STAT = 22, 10, 12, 17, 10
-        header = f" {Colors.DIM}┌" + "─"*W_NAME + "┬" + "─"*W_COUNT + "┬" + "─"*W_SIZE + "┬" + "─"*W_DUP + "┬" + "─"*W_STAT + "┐" + f"{Colors.RESET}"
-        title = f" {Colors.BOLD}│ {self.pad_text('媒体库名称', W_NAME)} │ {self.pad_text('文件数', W_COUNT)} │ {self.pad_text('总容量', W_SIZE)} │ {self.pad_text('冗余(可释放)', W_DUP)} │ {self.pad_text('状态', W_STAT)} │{Colors.RESET}"
-        sep = f" {Colors.DIM}├" + "─"*W_NAME + "┼" + "─"*W_COUNT + "┼" + "─"*W_SIZE + "┼" + "─"*W_DUP + "┼" + "─"*W_STAT + "┤" + f"{Colors.RESET}"
+        W_NAME = 22
+        W_COUNT = 10 
+        W_SIZE = 12
+        W_DUP = 17
+        W_STAT = 10
 
-        print(f"\n{header}\n{title}\n{sep}")
+        header_line = f" {Colors.DIM}┌" + "─"*W_NAME + "┬" + "─"*W_COUNT + "┬" + "─"*W_SIZE + "┬" + "─"*W_DUP + "┬" + "─"*W_STAT + "┐" + f"{Colors.RESET}"
+        title_line = f" {Colors.BOLD}│ {self.pad_text('媒体库名称', W_NAME)} │ {self.pad_text('文件数', W_COUNT)} │ {self.pad_text('总容量', W_SIZE)} │ {self.pad_text('冗余(可释放)', W_DUP)} │ {self.pad_text('状态', W_STAT)} │{Colors.RESET}"
+        sep_line = f" {Colors.DIM}├" + "─"*W_NAME + "┼" + "─"*W_COUNT + "┼" + "─"*W_SIZE + "┼" + "─"*W_DUP + "┼" + "─"*W_STAT + "┤" + f"{Colors.RESET}"
+
+        print(f"\n{header_line}\n{title_line}\n{sep_line}")
 
         self.last_scan_results = {}
         self.lib_types = {} 
@@ -371,21 +390,26 @@ class EmbyScannerPro:
                     
                     lib_total_bytes += size
                     lib_file_count += 1
+                    
                     path = source.get('Path')
                     
-                    # 核心逻辑区分
+                    # 分组 Key 策略
                     if ctype == 'tvshows':
                         s_name = item.get('SeriesName', '')
                         s = item.get('ParentIndexNumber', -1)
                         e = item.get('IndexNumber', -1)
                         if s != -1 and e != -1: display_name = f"{s_name} S{s:02d}E{e:02d}"
                         else: display_name = name
-                        # 剧集: 只要是同一集，就算重复 (忽略体积差异，捕获同集洗版)
-                        key = (s_name, s, e)
+                        
+                        if self.scan_mode == "loose":
+                            # 宽松模式：Key = 剧集ID信息 (同集即重复)
+                            key = (s_name, s, e)
+                        else:
+                            # 严格模式：Key = 剧集ID + 体积 (同集且同大才重复)
+                            key = (s_name, s, e, size)
                     else:
-                        # 电影: 严格体积查重
                         display_name = name
-                        key = size 
+                        key = size # 电影纯体积查重
                     
                     groups[key].append({
                         'id': item.get('Id'), 
@@ -407,23 +431,23 @@ class EmbyScannerPro:
 
             if dups:
                 for k, group in dups.items():
-                    if ctype == 'tvshows':
-                        # 剧集自动策略：保留体积最大的
+                    # 排序策略
+                    # Loose: 剧集按Size排序保留最大；电影按Filename长度
+                    # Strict: 都是同Size，按Filename长度
+                    
+                    if self.scan_mode == "loose" and ctype == 'tvshows':
+                        # 保留体积最大的
                         sorted_group = sorted(group, key=lambda x: x['size'], reverse=True)
-                        drops = sorted_group[1:]
-                        
-                        unique_paths = set(g['path'] for g in group)
-                        if len(unique_paths) <= 1: continue
-
-                        for d in drops: redundant += d['size']
-                        lib_dup_list.append({'group_key': k, 'files': sorted_group})
                     else:
-                        # 电影自动策略：同体积，保留一个
-                        size = k
-                        paths = set(g['path'] for g in group)
-                        if len(paths) > 1:
-                            redundant += (len(group) - 1) * size
-                            lib_dup_list.append({'size': size, 'files': group})
+                        # 保留文件名最长的
+                        sorted_group = sorted(group, key=lambda x: len(os.path.basename(x['path'])), reverse=True)
+
+                    drops = sorted_group[1:]
+                    unique_paths = set(g['path'] for g in group)
+                    if len(unique_paths) <= 1: continue
+
+                    for d in drops: redundant += d['size']
+                    lib_dup_list.append({'group_key': k, 'files': sorted_group})
             
             count_str = f"{lib_file_count}"
             size_str = self.format_size(lib_total_bytes)
@@ -443,29 +467,25 @@ class EmbyScannerPro:
         print(f" {Colors.DIM}└" + "─"*W_NAME + "┴" + "─"*W_COUNT + "┴" + "─"*W_SIZE + "┴" + "─"*W_DUP + "┴" + "─"*W_STAT + "┘" + f"{Colors.RESET}")
         print(f"\n {Colors.CYAN}📊 媒体库总容量: {self.format_size(grand_total_bytes)}  {Colors.DIM}|{Colors.RESET}  {Colors.CYAN}总文件数: {grand_total_count}{Colors.RESET}")
         
+        # 保存报告
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_path = os.path.join(self.data_dir, f"report_{timestamp}.txt")
         try:
             with open(report_path, 'w', encoding='utf-8') as f:
-                f.write(f"Emby 重复检测报告 - {timestamp}\n")
-                f.write(f"{'='*60}\n")
-                f.write(f"【媒体库容量概览】\n")
-                f.write(f"  - 全部合计             : {self.format_size(grand_total_bytes)} ({grand_total_count} files)\n")
+                f.write(f"Emby 重复检测报告 - {timestamp}\nStrategy: {self.scan_mode}\n{'='*60}\n")
                 for summary in lib_summaries: f.write(f"  - {summary}\n")
                 f.write(f"{'='*60}\n\n")
                 for lib, groups in self.last_scan_results.items():
                      f.write(f"📁 媒体库: {lib}\n{'-'*40}\n")
                      for g in groups:
-                         if 'size' in g: # 电影
-                             s_str = self.format_size(g['size'])
+                         group_files = g['files']
+                         if self.scan_mode == 'loose':
+                             f.write(f"📦 重复组 (保留最大文件):\n")
+                         else:
+                             s_str = self.format_size(group_files[0]['size'])
                              f.write(f"📦 重复组 (单文件: {s_str}):\n")
-                         else: # 剧集
-                             total_s = sum(x['size'] for x in g['files'])
-                             max_s = max(x['size'] for x in g['files'])
-                             waste = total_s - max_s
-                             f.write(f"📦 重复组 (冗余: {self.format_size(waste)}):\n")
 
-                         for file in g['files']:
+                         for file in group_files:
                              clean_info = self.get_clean_info(file['info'])
                              fs = self.format_size(file['size'])
                              f.write(f"  - [{fs}] {file['name']} [{clean_info}]\n    路径: {file['path']}\n")
@@ -481,21 +501,20 @@ class EmbyScannerPro:
     def manual_select_wizard(self):
         print(f"\n {Colors.YELLOW}💡 发现重复文件！进入清理模式{Colors.RESET}")
         libs = list(self.last_scan_results.keys())
-        for i, lib in enumerate(libs):
-            print(f"   [{i+1}] {lib} ({len(self.last_scan_results[lib])} 组)")
-        
+        for i, lib in enumerate(libs): print(f"   [{i+1}] {lib} ({len(self.last_scan_results[lib])} 组)")
         choice = self.get_user_input("选择库序号 (0=退出)").strip()
         if not choice.isdigit() or int(choice) == 0: return
         target_lib = libs[int(choice)-1]
         groups = self.last_scan_results[target_lib]
         
         is_tv = (self.lib_types.get(target_lib) == 'tvshows')
-        policy_text = "保留 #1 长命名文件" if not is_tv else "保留 #1 最大体积文件"
+        if self.scan_mode == 'loose' and is_tv: auto_policy = "保留 #1 最大体积"
+        else: auto_policy = "保留 #1 长命名文件"
 
         self.clear_screen()
         print(f"{Colors.CYAN}>>> 正在处理: {target_lib}{Colors.RESET}")
         print(f" {Colors.BOLD}请选择处理模式:{Colors.RESET}")
-        print(f"   {Colors.GREEN}[a] 批量自动模式{Colors.RESET} ({policy_text})")
+        print(f"   {Colors.GREEN}[a] 批量自动模式{Colors.RESET} ({auto_policy})")
         print(f"   {Colors.YELLOW}[m] 手动逐个确认{Colors.RESET} (逐一查看每组详情)")
         
         mode = self.get_user_input("输入 a 或 m").strip().lower()
@@ -505,11 +524,8 @@ class EmbyScannerPro:
             print(f"\n {Colors.YELLOW}🔄 正在自动匹配最佳文件...{Colors.RESET}")
             for group in groups:
                 files = group['files']
-                if is_tv: files = sorted(files, key=lambda x: x['size'], reverse=True)
-                else: files = sorted(files, key=lambda x: len(os.path.basename(x['path'])), reverse=True)
-                
+                # 已经排序好了 (在扫描阶段)
                 keep_file = files[0]; del_files = files[1:]
-                
                 is_safe = True
                 for f in del_files:
                     if f['id'] == keep_file['id']: is_safe = False 
@@ -518,11 +534,8 @@ class EmbyScannerPro:
         else:
             for idx, group in enumerate(groups):
                 files = group['files']
-                if is_tv: files = sorted(files, key=lambda x: x['size'], reverse=True)
-                else: files = sorted(files, key=lambda x: len(os.path.basename(x['path'])), reverse=True)
-
-                if 'size' in group: title_info = self.format_size(group['size'])
-                else: title_info = "Smart Dedupe"
+                if 'size' in group: title_info = self.format_size(group['size']) # strict
+                else: title_info = "同集不同源" # loose
 
                 print(f"\n{Colors.YELLOW}--- [第 {idx+1}/{len(groups)} 组] {title_info} ---{Colors.RESET}")
                 all_ids = [f['id'] for f in files]
@@ -570,6 +583,7 @@ class EmbyScannerPro:
 
     # --- 其他功能保持不变 ---
     def run_missing_check(self):
+        # ... (Include missing check code from v2.9.9) ...
         self.clear_screen(); self.print_banner(); print(f" {Colors.YELLOW}🔍 检查缺集...{Colors.RESET}")
         libs = self._request("/emby/Library/MediaFolders")
         if not libs: return
