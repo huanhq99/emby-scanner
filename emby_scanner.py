@@ -581,53 +581,101 @@ class EmbyScannerPro:
                 else: print(f"\n❌ 失败: {item['name']}")
             print(f"\n {Colors.GREEN}✅ 完成！成功删除 {success} 个。{Colors.RESET}"); self.pause()
 
-    # --- 其他功能保持不变 ---
+    # --- 其他功能 ---
     def run_missing_check(self):
-        # ... (Include missing check code from v2.9.9) ...
         self.clear_screen(); self.print_banner(); print(f" {Colors.YELLOW}🔍 检查缺集...{Colors.RESET}")
         libs = self._request("/emby/Library/MediaFolders")
-        if not libs: return
+        if not libs: 
+            print(f" {Colors.RED}❌ 无法获取媒体库信息。{Colors.RESET}")
+            self.pause()
+            return
         target_libs = [l for l in libs.get('Items', []) if l.get('CollectionType') == 'tvshows']
-        if not target_libs: print(f" {Colors.RED}❌ 无剧集库。{Colors.RESET}"); self.pause(); return
+        if not target_libs: 
+            print(f" {Colors.RED}❌ 无剧集库。{Colors.RESET}")
+            self.pause()
+            return
+        
         print(f"\n {Colors.DIM}┌" + "─"*22 + "┬" + "─"*14 + "┬" + "─"*17 + "┬" + "─"*12 + "┐" + f"{Colors.RESET}")
         print(f" {Colors.BOLD}│ {'媒体库名称':<20} │ {'剧集总数':<12} │ {'缺集统计':<13} │ {'状态':<10} │{Colors.RESET}")
         print(f" {Colors.DIM}├" + "─"*22 + "┼" + "─"*14 + "┼" + "─"*17 + "┼" + "─"*12 + "┤" + f"{Colors.RESET}")
         report_lines = ["🎬 Emby 缺集检测报告", "="*60, f"时间: {datetime.now()}", ""]
+        
         for lib in target_libs:
             lib_name = lib.get('Name')
-            sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} ...\r"); sys.stdout.flush()
-            params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Series', 'Limit': 1000000}
-            series_data = self._request("/emby/Items", params)
-            if not series_data: continue
-            all_series = series_data.get('Items', []); series_count = len(all_series); lib_missing_count = 0; lib_report_buffer = []
-            for series in all_series:
-                ep_params = {'ParentId': series['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Episode', 'Fields': 'ParentIndexNumber,IndexNumber', 'Limit': 10000}
-                ep_data = self._request("/emby/Items", ep_params)
-                if not ep_data: continue
-                season_map = defaultdict(list)
-                for ep in ep_data.get('Items', []):
-                    s = ep.get('ParentIndexNumber', 1); e = ep.get('IndexNumber')
-                    if e is not None: season_map[s].append(e)
-                series_missing = []
-                for s in sorted(season_map.keys()):
-                    if s == 0: continue
-                    eps = sorted(set(season_map[s])); max_ep = eps[-1]
-                    missing = sorted(list(set(range(1, max_ep + 1)) - set(eps)))
-                    if missing:
-                        lib_missing_count += len(missing)
-                        series_missing.append(f"  - S{s}: 缺 [{', '.join(map(str, missing))}]")
-                if series_missing:
-                    lib_report_buffer.append(f"📺 {series.get('Name')}"); lib_report_buffer.extend(series_missing); lib_report_buffer.append("")
-            if lib_missing_count > 0:
-                report_lines.append(f"📁 {lib_name}"); report_lines.extend(lib_report_buffer); report_lines.append("-" * 40)
-            status = f"{Colors.YELLOW}有缺集{Colors.RESET}" if lib_missing_count > 0 else f"{Colors.GREEN}完整{Colors.RESET}"
-            missing_str = f"{Colors.RED}{lib_missing_count} 集{Colors.RESET}" if lib_missing_count > 0 else "0"
-            sys.stdout.write("\r")
-            row_str = f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 14)} │ {self.pad_text(missing_str, 17)} │ {self.pad_text(status, 12)} │"
-            print(row_str)
+            sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 加载中...                              \r")
+            sys.stdout.flush()
+            
+            try:
+                params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Series', 'Limit': 1000000}
+                series_data = self._request("/emby/Items", params)
+                if not series_data: 
+                    print(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text('N/A', 14)} │ {self.pad_text('请求失败', 17)} │ {self.pad_text('❌', 12)} │")
+                    continue
+                
+                all_series = series_data.get('Items', [])
+                series_count = len(all_series)
+                lib_missing_count = 0
+                lib_report_buffer = []
+                
+                for idx, series in enumerate(all_series):
+                    # 显示进度
+                    progress = f"扫描 {idx+1}/{series_count}"
+                    sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(progress, 14)} ...                    \r")
+                    sys.stdout.flush()
+                    
+                    try:
+                        ep_params = {'ParentId': series['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Episode', 'Fields': 'ParentIndexNumber,IndexNumber', 'Limit': 10000}
+                        ep_data = self._request("/emby/Items", ep_params)
+                        if not ep_data: continue
+                        
+                        season_map = defaultdict(list)
+                        for ep in ep_data.get('Items', []):
+                            s = ep.get('ParentIndexNumber', 1)
+                            e = ep.get('IndexNumber')
+                            if e is not None: 
+                                season_map[s].append(e)
+                        
+                        series_missing = []
+                        for s in sorted(season_map.keys()):
+                            if s == 0: continue
+                            eps = sorted(set(season_map[s]))
+                            if not eps: continue
+                            max_ep = eps[-1]
+                            missing = sorted(list(set(range(1, max_ep + 1)) - set(eps)))
+                            if missing:
+                                lib_missing_count += len(missing)
+                                series_missing.append(f"  - S{s}: 缺 [{', '.join(map(str, missing))}]")
+                        
+                        if series_missing:
+                            lib_report_buffer.append(f"📺 {series.get('Name')}")
+                            lib_report_buffer.extend(series_missing)
+                            lib_report_buffer.append("")
+                    except Exception as e:
+                        continue  # 单个剧集失败不影响整体
+                
+                if lib_missing_count > 0:
+                    report_lines.append(f"📁 {lib_name}")
+                    report_lines.extend(lib_report_buffer)
+                    report_lines.append("-" * 40)
+                
+                status = f"{Colors.YELLOW}有缺集{Colors.RESET}" if lib_missing_count > 0 else f"{Colors.GREEN}完整{Colors.RESET}"
+                missing_str = f"{Colors.RED}{lib_missing_count} 集{Colors.RESET}" if lib_missing_count > 0 else "0"
+                sys.stdout.write("\r" + " " * 80 + "\r")  # 清除进度行
+                row_str = f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 14)} │ {self.pad_text(missing_str, 17)} │ {self.pad_text(status, 12)} │"
+                print(row_str)
+                
+            except Exception as e:
+                sys.stdout.write("\r" + " " * 80 + "\r")
+                print(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text('错误', 14)} │ {self.pad_text(str(e)[:15], 17)} │ {self.pad_text('❌', 12)} │")
+                continue
+        
         print(f" {Colors.DIM}└" + "─"*22 + "┴" + "─"*14 + "┴" + "─"*17 + "┴" + "─"*12 + "┘" + f"{Colors.RESET}")
+        
         try:
-            with open(os.path.join(self.data_dir, f"missing_report_{datetime.now().strftime('%Y%m%d')}.txt"), 'w') as f: f.write('\n'.join(report_lines))
+            report_path = os.path.join(self.data_dir, f"missing_report_{datetime.now().strftime('%Y%m%d')}.txt")
+            with open(report_path, 'w', encoding='utf-8') as f: 
+                f.write('\n'.join(report_lines))
+            print(f"\n 📄 缺集报告已保存: {report_path}")
         except: pass
         self.pause()
 
@@ -730,8 +778,115 @@ class EmbyScannerPro:
             elif c=='9': self.run_no_chinese_scanner()
             elif c=='0': sys.exit(0)
 
-    def view_reports(self): pass
-    def reset_config(self): pass
+    def view_reports(self):
+        self.clear_screen()
+        self.print_banner()
+        print(f" {Colors.YELLOW}📄 查看历史报告{Colors.RESET}\n")
+        
+        if not os.path.exists(self.data_dir):
+            print(f" {Colors.RED}❌ 数据目录不存在。{Colors.RESET}")
+            self.pause()
+            return
+        
+        # 查找所有报告文件
+        reports = []
+        try:
+            for f in os.listdir(self.data_dir):
+                if f.endswith('.txt') and ('report' in f or 'missing' in f):
+                    full_path = os.path.join(self.data_dir, f)
+                    mtime = os.path.getmtime(full_path)
+                    reports.append((f, full_path, mtime))
+        except Exception as e:
+            print(f" {Colors.RED}❌ 读取目录失败: {e}{Colors.RESET}")
+            self.pause()
+            return
+        
+        if not reports:
+            print(f" {Colors.DIM}暂无报告文件。{Colors.RESET}")
+            self.pause()
+            return
+        
+        # 按时间排序，最新的在前
+        reports.sort(key=lambda x: x[2], reverse=True)
+        
+        print(f" {Colors.DIM}找到 {len(reports)} 个报告:{Colors.RESET}\n")
+        for i, (name, path, mtime) in enumerate(reports[:10]):  # 只显示最近10个
+            time_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
+            print(f"   [{i+1}] {name}  {Colors.DIM}({time_str}){Colors.RESET}")
+        
+        print(f"\n   [0] 返回")
+        
+        choice = self.get_user_input("选择报告序号查看").strip()
+        if not choice.isdigit() or int(choice) == 0:
+            return
+        
+        idx = int(choice) - 1
+        if 0 <= idx < len(reports):
+            report_path = reports[idx][1]
+            self.clear_screen()
+            print(f" {Colors.CYAN}📄 {reports[idx][0]}{Colors.RESET}\n")
+            print(f" {Colors.DIM}" + "─" * 60 + f"{Colors.RESET}")
+            try:
+                with open(report_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    # 分页显示，最多显示100行
+                    lines = content.split('\n')
+                    for line in lines[:100]:
+                        print(f" {line}")
+                    if len(lines) > 100:
+                        print(f"\n {Colors.DIM}... (共 {len(lines)} 行，仅显示前100行){Colors.RESET}")
+                        print(f" {Colors.DIM}完整报告: {report_path}{Colors.RESET}")
+            except Exception as e:
+                print(f" {Colors.RED}❌ 读取失败: {e}{Colors.RESET}")
+            print(f" {Colors.DIM}" + "─" * 60 + f"{Colors.RESET}")
+        
+        self.pause()
+
+    def reset_config(self):
+        self.clear_screen()
+        self.print_banner()
+        print(f" {Colors.YELLOW}🔄 重置配置{Colors.RESET}\n")
+        print(f" {Colors.DIM}当前配置目录: {self.data_dir}{Colors.RESET}")
+        print(f" {Colors.DIM}当前服务器: {self.server_url}{Colors.RESET}\n")
+        
+        print(f" 请选择操作:")
+        print(f"   [1] 仅重置服务器连接配置")
+        print(f"   [2] 清空所有数据 (配置+报告)")
+        print(f"   [0] 取消\n")
+        
+        choice = self.get_user_input("选择").strip()
+        
+        if choice == '1':
+            config_file = os.path.join(self.data_dir, 'emby_config.json')
+            if os.path.exists(config_file):
+                try:
+                    os.remove(config_file)
+                    self.server_url = ""
+                    self.api_key = ""
+                    self.headers = {}
+                    print(f"\n {Colors.GREEN}✅ 配置已重置。下次启动将重新配置。{Colors.RESET}")
+                except Exception as e:
+                    print(f"\n {Colors.RED}❌ 删除失败: {e}{Colors.RESET}")
+            else:
+                print(f"\n {Colors.DIM}配置文件不存在。{Colors.RESET}")
+        
+        elif choice == '2':
+            confirm = self.get_user_input(f"{Colors.RED}确定清空所有数据? 输入 YES 确认{Colors.RESET}").strip()
+            if confirm == 'YES':
+                try:
+                    import shutil
+                    if os.path.exists(self.data_dir):
+                        shutil.rmtree(self.data_dir)
+                    self.server_url = ""
+                    self.api_key = ""
+                    self.headers = {}
+                    print(f"\n {Colors.GREEN}✅ 所有数据已清空。{Colors.RESET}")
+                except Exception as e:
+                    print(f"\n {Colors.RED}❌ 清空失败: {e}{Colors.RESET}")
+            else:
+                print(f"\n {Colors.DIM}已取消。{Colors.RESET}")
+        
+        self.pause()
 
 if __name__ == "__main__":
     try:
