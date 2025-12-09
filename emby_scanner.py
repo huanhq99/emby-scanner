@@ -1703,7 +1703,7 @@ class EmbyScannerPro:
             
             content += '<div class="chart-section"><div class="chart-title">📋 文件列表</div>'
             content += '<table><tr><th>#</th><th>名称</th><th>大小</th><th>分辨率</th><th>码率</th></tr>'
-            for i, f in enumerate(files[:100]):
+            for i, f in enumerate(files):
                 res_class = f"tag-{f.get('resolution', 'sd').lower()}"
                 bitrate = f"{f.get('bitrate', 0):.1f} Mbps" if f.get('bitrate') else "N/A"
                 name = f['name'][:60] + '...' if len(f['name']) > 60 else f['name']
@@ -1720,7 +1720,7 @@ class EmbyScannerPro:
             
             content += '<div class="chart-section"><div class="chart-title">📋 资源列表 (按评分排序)</div>'
             content += '<table><tr><th>#</th><th>名称</th><th>评分</th><th>媒体库</th></tr>'
-            for i, item in enumerate(items[:100]):
+            for i, item in enumerate(items):
                 rating = f"⭐ {item.get('rating', 0):.1f}" if item.get('rating') else "N/A"
                 name = item['name'][:50] + '...' if len(item['name']) > 50 else item['name']
                 content += f'<tr><td>{i+1}</td><td>{name}</td><td>{rating}</td><td>{item.get("lib", "N/A")}</td></tr>'
@@ -1743,7 +1743,7 @@ class EmbyScannerPro:
             
             content += '<div class="chart-section"><div class="chart-title">📋 缺集剧集列表 (按缺集数排序)</div>'
             content += '<table><tr><th>#</th><th>剧名</th><th>媒体库</th><th>缺集数</th><th>缺集详情</th></tr>'
-            for i, item in enumerate(sorted_details[:100]):
+            for i, item in enumerate(sorted_details):
                 name = item.get('series', 'Unknown')
                 if len(name) > 40:
                     name = name[:40] + '...'
