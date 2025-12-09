@@ -774,6 +774,15 @@ class EmbyScannerPro:
         print(f"\n {Colors.CYAN}📊 汇总: {total_series} 部剧集，{Colors.RED}{total_series_with_missing}{Colors.RESET}{Colors.CYAN} 部有缺集，共缺 {Colors.RED}{total_missing_episodes}{Colors.RESET}{Colors.CYAN} 集{Colors.RESET}")
         print(f" {Colors.DIM}⏱️  耗时: {elapsed:.2f} 秒{Colors.RESET}")
         
+        # 存储数据供 Web 使用
+        self.web_data['missing'] = {
+            'total_series': total_series,
+            'total_series_with_missing': total_series_with_missing,
+            'total_missing_episodes': total_missing_episodes,
+            'details': all_missing_details,
+            'elapsed': elapsed
+        }
+        
         try:
             report_path = os.path.join(self.data_dir, f"missing_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
             with open(report_path, 'w', encoding='utf-8') as f: 
@@ -786,6 +795,12 @@ class EmbyScannerPro:
             print(f" 📄 缺集报告已保存: {report_path}")
         except Exception as e:
             print(f" {Colors.RED}保存报告失败: {e}{Colors.RESET}")
+        
+        # 提供 Web 预览选项
+        if total_series_with_missing > 0:
+            preview = self.get_user_input("是否在浏览器中预览? (y/n)", default="n").strip().lower()
+            if preview == 'y':
+                self.start_web_preview('missing')
         
         self.pause()
 
@@ -1705,6 +1720,45 @@ class EmbyScannerPro:
                 rating = f"⭐ {item.get('rating', 0):.1f}" if item.get('rating') else "N/A"
                 name = item['name'][:50] + '...' if len(item['name']) > 50 else item['name']
                 content += f'<tr><td>{i+1}</td><td>{name}</td><td>{rating}</td><td>{item.get("lib", "N/A")}</td></tr>'
+            content += '</table></div>'
+        
+        elif data_type == 'missing' and 'missing' in self.web_data:
+            title = "缺集检查报告"
+            data = self.web_data['missing']
+            details = data.get('details', [])
+            
+            content += '<div class="stats-grid">'
+            content += f'<div class="stat-card"><div class="stat-value">{data.get("total_series", 0):,}</div><div class="stat-label">总剧集数</div></div>'
+            content += f'<div class="stat-card"><div class="stat-value" style="color:#ff6b6b">{data.get("total_series_with_missing", 0)}</div><div class="stat-label">缺集剧数</div></div>'
+            content += f'<div class="stat-card"><div class="stat-value" style="color:#ffa500">{data.get("total_missing_episodes", 0):,}</div><div class="stat-label">缺集总数</div></div>'
+            content += f'<div class="stat-card"><div class="stat-value">{data.get("elapsed", 0):.1f}s</div><div class="stat-label">扫描耗时</div></div>'
+            content += '</div>'
+            
+            # 按缺集数排序
+            sorted_details = sorted(details, key=lambda x: x.get('missing_count', 0), reverse=True)
+            
+            content += '<div class="chart-section"><div class="chart-title">📋 缺集剧集列表 (按缺集数排序)</div>'
+            content += '<table><tr><th>#</th><th>剧名</th><th>媒体库</th><th>缺集数</th><th>缺集详情</th></tr>'
+            for i, item in enumerate(sorted_details[:100]):
+                name = item.get('series', 'Unknown')
+                if len(name) > 40:
+                    name = name[:40] + '...'
+                lib = item.get('lib', 'N/A')
+                missing_count = item.get('missing_count', 0)
+                # 格式化缺集详情
+                detail_parts = []
+                for d in item.get('details', [])[:3]:  # 最多显示3季
+                    season = d.get('season', 0)
+                    missing = d.get('missing', [])
+                    if len(missing) > 5:
+                        missing_str = ', '.join(map(str, missing[:5])) + f'... (+{len(missing)-5})'
+                    else:
+                        missing_str = ', '.join(map(str, missing))
+                    detail_parts.append(f'S{season}: {missing_str}')
+                details_str = ' | '.join(detail_parts)
+                if len(item.get('details', [])) > 3:
+                    details_str += ' ...'
+                content += f'<tr><td>{i+1}</td><td>{name}</td><td>{lib}</td><td style="color:#ff6b6b;font-weight:bold">{missing_count}</td><td style="font-size:0.85em">{details_str}</td></tr>'
             content += '</table></div>'
         
         return html_template.format(title=title, content=content)
