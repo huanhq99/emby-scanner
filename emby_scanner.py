@@ -583,7 +583,13 @@ class EmbyScannerPro:
 
     # --- 其他功能 ---
     def run_missing_check(self):
-        self.clear_screen(); self.print_banner(); print(f" {Colors.YELLOW}🔍 检查缺集...{Colors.RESET}")
+        """缺集检查 - 优化版：批量获取所有剧集，减少API请求次数"""
+        self.clear_screen()
+        self.print_banner()
+        print(f" {Colors.YELLOW}🔍 检查缺集 (优化版)...{Colors.RESET}")
+        
+        start_time = time.time()
+        
         libs = self._request("/emby/Library/MediaFolders")
         if not libs: 
             print(f" {Colors.RED}❌ 无法获取媒体库信息。{Colors.RESET}")
@@ -600,58 +606,83 @@ class EmbyScannerPro:
         print(f" {Colors.DIM}├" + "─"*22 + "┼" + "─"*14 + "┼" + "─"*17 + "┼" + "─"*12 + "┤" + f"{Colors.RESET}")
         report_lines = ["🎬 Emby 缺集检测报告", "="*60, f"时间: {datetime.now()}", ""]
         
+        total_missing = 0
+        total_series = 0
+        
         for lib in target_libs:
             lib_name = lib.get('Name')
-            sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 加载中...                              \r")
+            sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 批量加载中...                          \r")
             sys.stdout.flush()
             
             try:
-                params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Series', 'Limit': 1000000}
-                series_data = self._request("/emby/Items", params)
+                # 步骤1: 获取所有剧集列表（只需要ID和名称）
+                series_params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Series', 'Fields': 'Name', 'Limit': 100000}
+                series_data = self._request("/emby/Items", series_params)
                 if not series_data: 
                     print(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text('N/A', 14)} │ {self.pad_text('请求失败', 17)} │ {self.pad_text('❌', 12)} │")
                     continue
                 
                 all_series = series_data.get('Items', [])
                 series_count = len(all_series)
+                total_series += series_count
+                
+                # 创建 Series ID -> Name 映射
+                series_map = {s['Id']: s.get('Name', 'Unknown') for s in all_series}
+                
+                sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 批量获取剧集...                        \r")
+                sys.stdout.flush()
+                
+                # 步骤2: 一次性批量获取该库下所有 Episode（关键优化！）
+                ep_params = {
+                    'ParentId': lib['Id'], 
+                    'Recursive': 'true', 
+                    'IncludeItemTypes': 'Episode', 
+                    'Fields': 'SeriesId,SeriesName,ParentIndexNumber,IndexNumber',
+                    'Limit': 500000  # 一次拉取所有
+                }
+                all_episodes = self._fetch_all_items("/emby/Items", ep_params, limit_per_page=10000)
+                
+                sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 分析 {len(all_episodes)} 集...                     \r")
+                sys.stdout.flush()
+                
+                # 步骤3: 按 SeriesId 分组
+                # 结构: {series_id: {season_num: [ep_nums]}}
+                series_episodes = defaultdict(lambda: defaultdict(list))
+                for ep in all_episodes:
+                    series_id = ep.get('SeriesId')
+                    if not series_id:
+                        continue
+                    season = ep.get('ParentIndexNumber', 1)
+                    episode = ep.get('IndexNumber')
+                    if episode is not None:
+                        series_episodes[series_id][season].append(episode)
+                
+                # 步骤4: 分析缺集
                 lib_missing_count = 0
                 lib_report_buffer = []
                 
-                for idx, series in enumerate(all_series):
-                    # 显示进度
-                    progress = f"扫描 {idx+1}/{series_count}"
-                    sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(progress, 14)} ...                    \r")
-                    sys.stdout.flush()
+                for series_id, seasons in series_episodes.items():
+                    series_name = series_map.get(series_id, ep.get('SeriesName', 'Unknown'))
+                    series_missing = []
                     
-                    try:
-                        ep_params = {'ParentId': series['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Episode', 'Fields': 'ParentIndexNumber,IndexNumber', 'Limit': 10000}
-                        ep_data = self._request("/emby/Items", ep_params)
-                        if not ep_data: continue
-                        
-                        season_map = defaultdict(list)
-                        for ep in ep_data.get('Items', []):
-                            s = ep.get('ParentIndexNumber', 1)
-                            e = ep.get('IndexNumber')
-                            if e is not None: 
-                                season_map[s].append(e)
-                        
-                        series_missing = []
-                        for s in sorted(season_map.keys()):
-                            if s == 0: continue
-                            eps = sorted(set(season_map[s]))
-                            if not eps: continue
-                            max_ep = eps[-1]
-                            missing = sorted(list(set(range(1, max_ep + 1)) - set(eps)))
-                            if missing:
-                                lib_missing_count += len(missing)
-                                series_missing.append(f"  - S{s}: 缺 [{', '.join(map(str, missing))}]")
-                        
-                        if series_missing:
-                            lib_report_buffer.append(f"📺 {series.get('Name')}")
-                            lib_report_buffer.extend(series_missing)
-                            lib_report_buffer.append("")
-                    except Exception as e:
-                        continue  # 单个剧集失败不影响整体
+                    for s in sorted(seasons.keys()):
+                        if s == 0 or s is None:
+                            continue
+                        eps = sorted(set(seasons[s]))
+                        if not eps:
+                            continue
+                        max_ep = eps[-1]
+                        missing = sorted(list(set(range(1, max_ep + 1)) - set(eps)))
+                        if missing:
+                            lib_missing_count += len(missing)
+                            series_missing.append(f"  - S{s}: 缺 [{', '.join(map(str, missing))}]")
+                    
+                    if series_missing:
+                        lib_report_buffer.append(f"📺 {series_name}")
+                        lib_report_buffer.extend(series_missing)
+                        lib_report_buffer.append("")
+                
+                total_missing += lib_missing_count
                 
                 if lib_missing_count > 0:
                     report_lines.append(f"📁 {lib_name}")
@@ -660,7 +691,7 @@ class EmbyScannerPro:
                 
                 status = f"{Colors.YELLOW}有缺集{Colors.RESET}" if lib_missing_count > 0 else f"{Colors.GREEN}完整{Colors.RESET}"
                 missing_str = f"{Colors.RED}{lib_missing_count} 集{Colors.RESET}" if lib_missing_count > 0 else "0"
-                sys.stdout.write("\r" + " " * 80 + "\r")  # 清除进度行
+                sys.stdout.write("\r" + " " * 80 + "\r")
                 row_str = f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 14)} │ {self.pad_text(missing_str, 17)} │ {self.pad_text(status, 12)} │"
                 print(row_str)
                 
@@ -671,12 +702,19 @@ class EmbyScannerPro:
         
         print(f" {Colors.DIM}└" + "─"*22 + "┴" + "─"*14 + "┴" + "─"*17 + "┴" + "─"*12 + "┘" + f"{Colors.RESET}")
         
+        elapsed = time.time() - start_time
+        print(f"\n {Colors.CYAN}📊 汇总: {total_series} 部剧集, 共缺 {total_missing} 集{Colors.RESET}")
+        print(f" {Colors.DIM}⏱️  耗时: {elapsed:.2f} 秒{Colors.RESET}")
+        
         try:
-            report_path = os.path.join(self.data_dir, f"missing_report_{datetime.now().strftime('%Y%m%d')}.txt")
+            report_path = os.path.join(self.data_dir, f"missing_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
             with open(report_path, 'w', encoding='utf-8') as f: 
                 f.write('\n'.join(report_lines))
-            print(f"\n 📄 缺集报告已保存: {report_path}")
-        except: pass
+                f.write(f"\n\n{'='*60}\n汇总: {total_series} 部剧集, 共缺 {total_missing} 集\n耗时: {elapsed:.2f} 秒\n")
+            print(f" 📄 缺集报告已保存: {report_path}")
+        except Exception as e:
+            print(f" {Colors.RED}保存报告失败: {e}{Colors.RESET}")
+        
         self.pause()
 
     def run_junk_cleaner(self):
