@@ -25,6 +25,8 @@ import getpass
 import threading
 import webbrowser
 import socket
+import secrets
+import string
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from collections import defaultdict
 from datetime import datetime
@@ -61,6 +63,8 @@ class EmbyScannerPro:
         # Web UI 相关
         self.web_data = {}  # 存储用于 Web 展示的数据
         self.web_server = None
+        self.web_server_thread = None
+        self.web_reports = {}  # 存储多个报告 {token: html_content}
 
         home_dir = os.environ.get('HOME')
         self.script_dir = home_dir if home_dir else os.path.expanduser('~')
@@ -1763,17 +1767,50 @@ class EmbyScannerPro:
         
         return html_template.format(title=title, content=content)
     
+    def generate_report_token(self, length=12):
+        """生成随机访问令牌"""
+        alphabet = string.ascii_lowercase + string.digits
+        return ''.join(secrets.choice(alphabet) for _ in range(length))
+    
+    def get_local_ip(self):
+        """获取本机IP地址"""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            return "YOUR_VPS_IP"
+    
     def start_web_preview(self, data_type):
-        """启动 Web 预览服务器"""
+        """启动 Web 预览服务器 (VPS 友好版)"""
         html_content = self.generate_web_html(data_type)
         
-        # 保存 HTML 文件
-        html_path = os.path.join(self.data_dir, 'preview.html')
+        # 生成唯一访问令牌
+        token = self.generate_report_token()
+        self.web_reports[token] = html_content
+        
+        # 同时保存到文件（备用）
+        html_path = os.path.join(self.data_dir, f'report_{token}.html')
         try:
             with open(html_path, 'w', encoding='utf-8') as f:
                 f.write(html_content)
         except Exception as e:
-            print(f" {Colors.RED}生成预览失败: {e}{Colors.RESET}")
+            print(f" {Colors.YELLOW}保存报告文件失败: {e}{Colors.RESET}")
+        
+        # 如果服务器已经在运行，直接返回新链接
+        if self.web_server and self.web_server_thread and self.web_server_thread.is_alive():
+            local_ip = self.get_local_ip()
+            port = self.web_server.server_address[1]
+            print(f"\n {Colors.GREEN}{'═' * 55}{Colors.RESET}")
+            print(f" {Colors.GREEN}🌐 报告已生成！{Colors.RESET}")
+            print(f" {Colors.GREEN}{'═' * 55}{Colors.RESET}")
+            print(f"\n {Colors.CYAN}📋 访问链接:{Colors.RESET}")
+            print(f"    {Colors.BOLD}http://{local_ip}:{port}/{token}{Colors.RESET}")
+            print(f"\n {Colors.DIM}💡 提示: 此链接仅自己知道，可在浏览器中打开{Colors.RESET}")
+            print(f" {Colors.DIM}💡 服务器持续运行中，可生成多个报告{Colors.RESET}")
+            print(f" {Colors.GREEN}{'═' * 55}{Colors.RESET}")
             return
         
         # 找一个可用端口
@@ -1781,56 +1818,122 @@ class EmbyScannerPro:
         for p in range(8899, 8999):
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.bind(('127.0.0.1', p))
+                sock.bind(('0.0.0.0', p))
                 sock.close()
                 port = p
                 break
             except:
                 continue
         
-        # 创建简单的 HTTP 服务器
-        class PreviewHandler(BaseHTTPRequestHandler):
+        # 保存 scanner 实例引用
+        scanner = self
+        
+        # 创建 HTTP 服务器
+        class ReportHandler(BaseHTTPRequestHandler):
             def do_GET(self):
-                self.send_response(200)
-                self.send_header('Content-type', 'text/html; charset=utf-8')
-                self.end_headers()
-                with open(html_path, 'rb') as f:
-                    self.wfile.write(f.read())
+                # 解析路径，获取 token
+                path = self.path.strip('/')
+                
+                if path in scanner.web_reports:
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/html; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(scanner.web_reports[path].encode('utf-8'))
+                elif path == '':
+                    # 首页显示所有可用报告
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/html; charset=utf-8')
+                    self.end_headers()
+                    html = f'''<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Emby Scanner Reports</title>
+<style>body{{font-family:system-ui;background:#1a1a2e;color:#eee;padding:40px;}}
+h1{{color:#4ecdc4;}}a{{color:#ffd93d;}}ul{{line-height:2;}}</style></head>
+<body><h1>📊 Emby Scanner Reports</h1>
+<p>当前有 {len(scanner.web_reports)} 个可用报告:</p><ul>'''
+                    for t in scanner.web_reports:
+                        html += f'<li><a href="/{t}">/{t}</a></li>'
+                    html += '</ul></body></html>'
+                    self.wfile.write(html.encode('utf-8'))
+                else:
+                    self.send_response(404)
+                    self.send_header('Content-type', 'text/html; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b'<h1>404 - Report Not Found</h1>')
+            
             def log_message(self, format, *args):
                 pass  # 禁止日志输出
         
-        server = HTTPServer(('127.0.0.1', port), PreviewHandler)
-        
-        # 在后台线程运行服务器
-        def serve():
-            server.handle_request()  # 只处理一个请求
-        
-        thread = threading.Thread(target=serve, daemon=True)
-        thread.start()
-        
-        url = f"http://127.0.0.1:{port}"
-        print(f"\n {Colors.GREEN}🌐 正在打开浏览器预览: {url}{Colors.RESET}")
-        
-        # 打开浏览器
         try:
-            webbrowser.open(url)
-        except:
-            print(f" {Colors.YELLOW}请手动打开浏览器访问: {url}{Colors.RESET}")
+            self.web_server = HTTPServer(('0.0.0.0', port), ReportHandler)
+        except Exception as e:
+            print(f" {Colors.RED}启动 Web 服务器失败: {e}{Colors.RESET}")
+            return
         
-        time.sleep(2)  # 等待浏览器加载
+        # 在后台线程持续运行服务器
+        def serve_forever():
+            try:
+                self.web_server.serve_forever()
+            except:
+                pass
+        
+        self.web_server_thread = threading.Thread(target=serve_forever, daemon=True)
+        self.web_server_thread.start()
+        
+        local_ip = self.get_local_ip()
+        
+        print(f"\n {Colors.GREEN}{'═' * 55}{Colors.RESET}")
+        print(f" {Colors.GREEN}🌐 Web 服务器已启动！{Colors.RESET}")
+        print(f" {Colors.GREEN}{'═' * 55}{Colors.RESET}")
+        print(f"\n {Colors.CYAN}📋 访问链接:{Colors.RESET}")
+        print(f"    {Colors.BOLD}http://{local_ip}:{port}/{token}{Colors.RESET}")
+        print(f"\n {Colors.DIM}💡 提示: 将 {local_ip} 替换为你的 VPS 公网 IP{Colors.RESET}")
+        print(f" {Colors.DIM}💡 链接只有自己知道，可安全分享给需要的人{Colors.RESET}")
+        print(f" {Colors.DIM}💡 服务器会在程序运行期间持续提供服务{Colors.RESET}")
+        print(f" {Colors.GREEN}{'═' * 55}{Colors.RESET}")
+    
+    def show_web_server_status(self):
+        """显示 Web 服务器状态和所有报告链接"""
+        self.clear_screen()
+        self.print_banner()
+        
+        print(f" {Colors.BOLD}📡 Web 服务器状态{Colors.RESET}\n")
+        
+        if self.web_server and self.web_server_thread and self.web_server_thread.is_alive():
+            local_ip = self.get_local_ip()
+            port = self.web_server.server_address[1]
+            print(f" {Colors.GREEN}● 服务器状态: 运行中{Colors.RESET}")
+            print(f" {Colors.DIM}   端口: {port}{Colors.RESET}")
+            print(f" {Colors.DIM}   本机IP: {local_ip}{Colors.RESET}")
+            
+            if self.web_reports:
+                print(f"\n {Colors.CYAN}📋 可用报告链接 ({len(self.web_reports)} 个):{Colors.RESET}\n")
+                for token in self.web_reports:
+                    print(f"    http://{local_ip}:{port}/{token}")
+                print(f"\n {Colors.DIM}💡 将 {local_ip} 替换为你的 VPS 公网 IP 即可外网访问{Colors.RESET}")
+            else:
+                print(f"\n {Colors.YELLOW}暂无报告，请先运行扫描功能{Colors.RESET}")
+        else:
+            print(f" {Colors.YELLOW}● 服务器状态: 未启动{Colors.RESET}")
+            print(f"\n {Colors.DIM}💡 运行扫描功能并选择 Web 预览后，服务器会自动启动{Colors.RESET}")
+        
+        self.pause()
 
     # --- 菜单 ---
     def main_menu(self):
         while True:
             self.clear_screen(); self.print_banner()
             server_status = f"{Colors.GREEN}● 已连接{Colors.RESET}" if self.server_url else f"{Colors.RED}● 未配置{Colors.RESET}"
-            print(f" {Colors.DIM}Server: {server_status}   Data: {self.data_dir}\n")
+            # Web 服务器状态
+            web_status = ""
+            if self.web_server and self.web_server_thread and self.web_server_thread.is_alive():
+                web_status = f"  {Colors.GREEN}Web: ●{Colors.RESET}"
+            print(f" {Colors.DIM}Server: {server_status}{web_status}   Data: {self.data_dir}\n")
             print(f" {Colors.BOLD}--- 核心维护 ---{Colors.RESET}")
             print(f" {Colors.CYAN}[1]{Colors.RESET} 🚀  重复文件扫描    {Colors.MAGENTA}[5]{Colors.RESET} 🔍  剧集缺集检查")
             print(f"\n {Colors.BOLD}--- 扩展工具 ---{Colors.RESET}")
             print(f" {Colors.BLUE}[6]{Colors.RESET} 🧹  垃圾清理        {Colors.BLUE}[7]{Colors.RESET} 📊  透视分析")
             print(f" {Colors.BLUE}[8]{Colors.RESET} 🐘  大文件筛选      {Colors.BLUE}[9]{Colors.RESET} 🈯  无中字检测")
-            print(f" {Colors.BLUE}[r]{Colors.RESET} 🔄  刷新媒体库")
+            print(f" {Colors.BLUE}[r]{Colors.RESET} 🔄  刷新媒体库      {Colors.BLUE}[w]{Colors.RESET} 🌐  Web报告")
             print(f"\n {Colors.BOLD}--- 系统设置 ---{Colors.RESET}")
             print(f" {Colors.DIM}[2] 配置  [3] 报告  [4] 重置  [0] 退出{Colors.RESET}\n")
             c = self.get_user_input("请选择").strip().lower()
@@ -1844,6 +1947,7 @@ class EmbyScannerPro:
             elif c=='8': self.run_large_file_scanner()
             elif c=='9': self.run_no_chinese_scanner()
             elif c=='r': self.refresh_library()
+            elif c=='w': self.show_web_server_status()
             elif c=='0': sys.exit(0)
 
     def view_reports(self):
