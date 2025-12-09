@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v3.7 Ultimate Edition (Dual Strategy)
+Emby媒体库重复检测工具 v3.8 Ultimate Edition (Dual Strategy)
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 双重查重模式：
@@ -42,7 +42,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "3.7 Ultimate"
+        self.version = "3.8 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -206,7 +206,7 @@ class EmbyScannerPro:
                     config = json.load(f)
                     self.server_url = config.get('server_url', '').rstrip('/')
                     self.api_key = config.get('api_key', '')
-                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/3.7'}
+                    self.headers = {'X-Emby-Token': self.api_key, 'Content-Type': 'application/json', 'User-Agent': 'EmbyScannerPro/3.8'}
                     return True
             except: pass
         return False
@@ -601,25 +601,32 @@ class EmbyScannerPro:
             self.pause()
             return
         
-        print(f"\n {Colors.DIM}┌" + "─"*22 + "┬" + "─"*14 + "┬" + "─"*17 + "┬" + "─"*12 + "┐" + f"{Colors.RESET}")
-        print(f" {Colors.BOLD}│ {'媒体库名称':<20} │ {'剧集总数':<12} │ {'缺集统计':<13} │ {'状态':<10} │{Colors.RESET}")
-        print(f" {Colors.DIM}├" + "─"*22 + "┼" + "─"*14 + "┼" + "─"*17 + "┼" + "─"*12 + "┤" + f"{Colors.RESET}")
+        print(f"\n {Colors.DIM}┌" + "─"*22 + "┬" + "─"*12 + "┬" + "─"*14 + "┬" + "─"*17 + "┬" + "─"*10 + "┐" + f"{Colors.RESET}")
+        print(f" {Colors.BOLD}│ {'媒体库名称':<20} │ {'剧集数':<10} │ {'缺集剧数':<10} │ {'缺集总数':<13} │ {'状态':<8} │{Colors.RESET}")
+        print(f" {Colors.DIM}├" + "─"*22 + "┼" + "─"*12 + "┼" + "─"*14 + "┼" + "─"*17 + "┼" + "─"*10 + "┤" + f"{Colors.RESET}")
         report_lines = ["🎬 Emby 缺集检测报告", "="*60, f"时间: {datetime.now()}", ""]
         
-        total_missing = 0
-        total_series = 0
+        total_missing_episodes = 0  # 总缺集数
+        total_series = 0            # 总剧集数（去重后的 Series）
+        total_series_with_missing = 0  # 有缺集的剧数
         
         for lib in target_libs:
             lib_name = lib.get('Name')
-            sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 批量加载中...                          \r")
+            sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 批量加载中...                                    \r")
             sys.stdout.flush()
             
             try:
-                # 步骤1: 获取所有剧集列表（只需要ID和名称）
-                series_params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Series', 'Fields': 'Name', 'Limit': 100000}
+                # 步骤1: 获取所有剧集列表（Series，不是 Season）
+                series_params = {
+                    'ParentId': lib['Id'], 
+                    'Recursive': 'true', 
+                    'IncludeItemTypes': 'Series',  # 只获取 Series，不是 Season
+                    'Fields': 'Name', 
+                    'Limit': 100000
+                }
                 series_data = self._request("/emby/Items", series_params)
                 if not series_data: 
-                    print(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text('N/A', 14)} │ {self.pad_text('请求失败', 17)} │ {self.pad_text('❌', 12)} │")
+                    print(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text('N/A', 12)} │ {self.pad_text('请求失败', 14)} │ {self.pad_text('-', 17)} │ {self.pad_text('❌', 10)} │")
                     continue
                 
                 all_series = series_data.get('Items', [])
@@ -629,7 +636,7 @@ class EmbyScannerPro:
                 # 创建 Series ID -> Name 映射
                 series_map = {s['Id']: s.get('Name', 'Unknown') for s in all_series}
                 
-                sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 批量获取剧集...                        \r")
+                sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 批量获取剧集...                                  \r")
                 sys.stdout.flush()
                 
                 # 步骤2: 一次性批量获取该库下所有 Episode（关键优化！）
@@ -638,15 +645,14 @@ class EmbyScannerPro:
                     'Recursive': 'true', 
                     'IncludeItemTypes': 'Episode', 
                     'Fields': 'SeriesId,SeriesName,ParentIndexNumber,IndexNumber',
-                    'Limit': 500000  # 一次拉取所有
+                    'Limit': 500000
                 }
                 all_episodes = self._fetch_all_items("/emby/Items", ep_params, limit_per_page=10000)
                 
-                sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 分析 {len(all_episodes)} 集...                     \r")
+                sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 分析 {len(all_episodes)} 集...                           \r")
                 sys.stdout.flush()
                 
                 # 步骤3: 按 SeriesId 分组
-                # 结构: {series_id: {season_num: [ep_nums]}}
                 series_episodes = defaultdict(lambda: defaultdict(list))
                 for ep in all_episodes:
                     series_id = ep.get('SeriesId')
@@ -658,12 +664,14 @@ class EmbyScannerPro:
                         series_episodes[series_id][season].append(episode)
                 
                 # 步骤4: 分析缺集
-                lib_missing_count = 0
+                lib_missing_episodes = 0  # 该库缺集总数
+                lib_series_with_missing = 0  # 该库有缺集的剧数
                 lib_report_buffer = []
                 
                 for series_id, seasons in series_episodes.items():
-                    series_name = series_map.get(series_id, ep.get('SeriesName', 'Unknown'))
+                    series_name = series_map.get(series_id, 'Unknown')
                     series_missing = []
+                    series_missing_count = 0
                     
                     for s in sorted(seasons.keys()):
                         if s == 0 or s is None:
@@ -674,43 +682,52 @@ class EmbyScannerPro:
                         max_ep = eps[-1]
                         missing = sorted(list(set(range(1, max_ep + 1)) - set(eps)))
                         if missing:
-                            lib_missing_count += len(missing)
+                            series_missing_count += len(missing)
                             series_missing.append(f"  - S{s}: 缺 [{', '.join(map(str, missing))}]")
                     
                     if series_missing:
-                        lib_report_buffer.append(f"📺 {series_name}")
+                        lib_missing_episodes += series_missing_count
+                        lib_series_with_missing += 1
+                        lib_report_buffer.append(f"📺 {series_name} (缺 {series_missing_count} 集)")
                         lib_report_buffer.extend(series_missing)
                         lib_report_buffer.append("")
                 
-                total_missing += lib_missing_count
+                total_missing_episodes += lib_missing_episodes
+                total_series_with_missing += lib_series_with_missing
                 
-                if lib_missing_count > 0:
-                    report_lines.append(f"📁 {lib_name}")
+                if lib_missing_episodes > 0:
+                    report_lines.append(f"📁 {lib_name} ({lib_series_with_missing} 部剧缺集，共缺 {lib_missing_episodes} 集)")
                     report_lines.extend(lib_report_buffer)
                     report_lines.append("-" * 40)
                 
-                status = f"{Colors.YELLOW}有缺集{Colors.RESET}" if lib_missing_count > 0 else f"{Colors.GREEN}完整{Colors.RESET}"
-                missing_str = f"{Colors.RED}{lib_missing_count} 集{Colors.RESET}" if lib_missing_count > 0 else "0"
-                sys.stdout.write("\r" + " " * 80 + "\r")
-                row_str = f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 14)} │ {self.pad_text(missing_str, 17)} │ {self.pad_text(status, 12)} │"
+                status = f"{Colors.YELLOW}有缺集{Colors.RESET}" if lib_missing_episodes > 0 else f"{Colors.GREEN}完整{Colors.RESET}"
+                missing_series_str = f"{Colors.RED}{lib_series_with_missing} 部{Colors.RESET}" if lib_series_with_missing > 0 else "0"
+                missing_ep_str = f"{Colors.RED}{lib_missing_episodes} 集{Colors.RESET}" if lib_missing_episodes > 0 else "0"
+                
+                sys.stdout.write("\r" + " " * 100 + "\r")
+                row_str = f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 12)} │ {self.pad_text(missing_series_str, 14)} │ {self.pad_text(missing_ep_str, 17)} │ {self.pad_text(status, 10)} │"
                 print(row_str)
                 
             except Exception as e:
-                sys.stdout.write("\r" + " " * 80 + "\r")
-                print(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text('错误', 14)} │ {self.pad_text(str(e)[:15], 17)} │ {self.pad_text('❌', 12)} │")
+                sys.stdout.write("\r" + " " * 100 + "\r")
+                print(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text('错误', 12)} │ {self.pad_text('-', 14)} │ {self.pad_text(str(e)[:15], 17)} │ {self.pad_text('❌', 10)} │")
                 continue
         
-        print(f" {Colors.DIM}└" + "─"*22 + "┴" + "─"*14 + "┴" + "─"*17 + "┴" + "─"*12 + "┘" + f"{Colors.RESET}")
+        print(f" {Colors.DIM}└" + "─"*22 + "┴" + "─"*12 + "┴" + "─"*14 + "┴" + "─"*17 + "┴" + "─"*10 + "┘" + f"{Colors.RESET}")
         
         elapsed = time.time() - start_time
-        print(f"\n {Colors.CYAN}📊 汇总: {total_series} 部剧集, 共缺 {total_missing} 集{Colors.RESET}")
+        print(f"\n {Colors.CYAN}📊 汇总: {total_series} 部剧集，{Colors.RED}{total_series_with_missing}{Colors.RESET}{Colors.CYAN} 部有缺集，共缺 {Colors.RED}{total_missing_episodes}{Colors.RESET}{Colors.CYAN} 集{Colors.RESET}")
         print(f" {Colors.DIM}⏱️  耗时: {elapsed:.2f} 秒{Colors.RESET}")
         
         try:
             report_path = os.path.join(self.data_dir, f"missing_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
             with open(report_path, 'w', encoding='utf-8') as f: 
                 f.write('\n'.join(report_lines))
-                f.write(f"\n\n{'='*60}\n汇总: {total_series} 部剧集, 共缺 {total_missing} 集\n耗时: {elapsed:.2f} 秒\n")
+                f.write(f"\n\n{'='*60}\n")
+                f.write(f"汇总: {total_series} 部剧集\n")
+                f.write(f"缺集剧数: {total_series_with_missing} 部\n")
+                f.write(f"缺集总数: {total_missing_episodes} 集\n")
+                f.write(f"耗时: {elapsed:.2f} 秒\n")
             print(f" 📄 缺集报告已保存: {report_path}")
         except Exception as e:
             print(f" {Colors.RED}保存报告失败: {e}{Colors.RESET}")
@@ -731,66 +748,389 @@ class EmbyScannerPro:
         print(f" 📄 脚本已生成: {sh_path}"); self.pause()
 
     def run_analytics(self):
-        self.clear_screen(); self.print_banner(); print(f" {Colors.YELLOW}📊 媒体库透视...{Colors.RESET}")
+        self.clear_screen()
+        self.print_banner()
+        print(f" {Colors.YELLOW}📊 媒体库透视...{Colors.RESET}")
+        
         params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'MediaSources,Path'}
         items = self._fetch_all_items("/emby/Items", params, 10000)
-        if not items: return
-        stats = {'Resolution': defaultdict(int), 'SourceType': defaultdict(int), 'DynamicRange': defaultdict(int), 'ReleaseGroup': defaultdict(int), 'TotalCount':0}
+        if not items: 
+            print(f" {Colors.RED}❌ 无法获取媒体信息。{Colors.RESET}")
+            self.pause()
+            return
+        
+        stats = {
+            'Resolution': defaultdict(int), 
+            'Codec': defaultdict(int),
+            'SourceType': defaultdict(int), 
+            'DynamicRange': defaultdict(int), 
+            'ReleaseGroup': defaultdict(int), 
+            'TotalCount': 0,
+            'TotalSize': 0
+        }
+        
         print("\n 🔄 统计中...")
         for item in items:
             stats['TotalCount'] += 1
             sources = item.get('MediaSources', [])
             if not sources: continue
-            source = sources[0]; path = item.get('Path', '').upper(); name = item.get('Name', '').upper()
+            source = sources[0]
+            path = item.get('Path', '').upper()
+            
+            # 统计大小
+            size = source.get('Size', 0)
+            if size: stats['TotalSize'] += size
+            
+            # 统计来源类型
             if 'REMUX' in path: stats['SourceType']['Remux'] += 1
+            elif 'BLURAY' in path or 'BLU-RAY' in path: stats['SourceType']['BluRay'] += 1
+            elif 'WEB-DL' in path or 'WEBDL' in path: stats['SourceType']['WEB-DL'] += 1
+            elif 'WEBRIP' in path: stats['SourceType']['WEBRip'] += 1
+            elif 'HDTV' in path: stats['SourceType']['HDTV'] += 1
             else: stats['SourceType']['Other'] += 1
+            
+            # 统计制作组
             try:
                 fname = os.path.basename(item.get('Path', ''))
                 if '-' in fname:
                     group = os.path.splitext(fname)[0].split('-')[-1].strip()
-                    if 1 < len(group) < 15 and not group.isdigit(): stats['ReleaseGroup'][group] += 1
-            except: pass
+                    if 1 < len(group) < 15 and not group.isdigit():
+                        stats['ReleaseGroup'][group] += 1
+            except Exception:
+                pass
+            
+            # 统计视频流信息
             for stream in source.get('MediaStreams', []):
                 if stream.get('Type') == 'Video':
                     w = stream.get('Width', 0)
-                    if w>=3800: res="4K"
-                    elif w>=1900: res="1080P"
-                    else: res="SD"
+                    if w >= 3800: res = "4K"
+                    elif w >= 1900: res = "1080P"
+                    elif w >= 1200: res = "720P"
+                    else: res = "SD"
                     stats['Resolution'][res] += 1
+                    
+                    # 编码
+                    codec = stream.get('Codec', 'unknown').upper()
+                    if codec in ['HEVC', 'H265']: stats['Codec']['HEVC/H.265'] += 1
+                    elif codec in ['AVC', 'H264']: stats['Codec']['AVC/H.264'] += 1
+                    elif codec in ['AV1']: stats['Codec']['AV1'] += 1
+                    else: stats['Codec']['Other'] += 1
+                    
+                    # HDR
                     vr = stream.get('VideoRange', '').upper()
-                    if 'HDR' in vr: stats['DynamicRange']['HDR'] += 1
+                    vrt = stream.get('VideoRangeType', '').upper()
+                    if 'DOLBY' in vrt or 'DV' in vrt: stats['DynamicRange']['Dolby Vision'] += 1
+                    elif 'HDR10+' in vrt: stats['DynamicRange']['HDR10+'] += 1
+                    elif 'HDR' in vr: stats['DynamicRange']['HDR10'] += 1
+                    else: stats['DynamicRange']['SDR'] += 1
                     break
-        print(f"\n {Colors.BOLD}总计: {stats['TotalCount']}{Colors.RESET}"); 
-        print(f" 📺 4K: {stats['Resolution']['4K']}"); 
+        
+        # 显示统计结果
+        print(f"\n {Colors.BOLD}{'='*50}{Colors.RESET}")
+        print(f" {Colors.CYAN}📊 媒体库统计报告{Colors.RESET}")
+        print(f" {Colors.BOLD}{'='*50}{Colors.RESET}\n")
+        
+        print(f" {Colors.BOLD}总览:{Colors.RESET}")
+        print(f"   总文件数: {Colors.GREEN}{stats['TotalCount']}{Colors.RESET}")
+        print(f"   总容量: {Colors.GREEN}{self.format_size(stats['TotalSize'])}{Colors.RESET}")
+        
+        print(f"\n {Colors.BOLD}分辨率分布:{Colors.RESET}")
+        for res in ['4K', '1080P', '720P', 'SD']:
+            count = stats['Resolution'].get(res, 0)
+            pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
+            bar = '█' * int(pct / 5) + '░' * (20 - int(pct / 5))
+            color = Colors.MAGENTA if res == '4K' else Colors.GREEN if res == '1080P' else Colors.RESET
+            print(f"   {color}{res:>6}{Colors.RESET}: {bar} {count:>6} ({pct:>5.1f}%)")
+        
+        print(f"\n {Colors.BOLD}视频编码:{Colors.RESET}")
+        for codec, count in sorted(stats['Codec'].items(), key=lambda x: -x[1]):
+            pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
+            print(f"   {codec:>12}: {count:>6} ({pct:>5.1f}%)")
+        
+        print(f"\n {Colors.BOLD}动态范围:{Colors.RESET}")
+        for dr in ['Dolby Vision', 'HDR10+', 'HDR10', 'SDR']:
+            count = stats['DynamicRange'].get(dr, 0)
+            pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
+            color = Colors.CYAN if 'Dolby' in dr else Colors.YELLOW if 'HDR' in dr else Colors.DIM
+            print(f"   {color}{dr:>12}{Colors.RESET}: {count:>6} ({pct:>5.1f}%)")
+        
+        print(f"\n {Colors.BOLD}来源类型:{Colors.RESET}")
+        for src, count in sorted(stats['SourceType'].items(), key=lambda x: -x[1])[:6]:
+            pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
+            print(f"   {src:>12}: {count:>6} ({pct:>5.1f}%)")
+        
+        # TOP 制作组
+        if stats['ReleaseGroup']:
+            print(f"\n {Colors.BOLD}TOP 10 制作组:{Colors.RESET}")
+            for group, count in sorted(stats['ReleaseGroup'].items(), key=lambda x: -x[1])[:10]:
+                print(f"   {Colors.BLUE}{group:>15}{Colors.RESET}: {count}")
+        
+        print(f"\n {Colors.BOLD}{'='*50}{Colors.RESET}")
         self.pause()
 
     def run_large_file_scanner(self):
-        self.clear_screen(); self.print_banner(); print(f" {Colors.YELLOW}🐘 大文件筛选...{Colors.RESET}")
-        libs = self._request("/emby/Library/MediaFolders"); 
-        if not libs: return
-        targets = [l for l in libs.get('Items', []) if l.get('CollectionType') == 'movies']
-        large = []
+        self.clear_screen()
+        self.print_banner()
+        print(f" {Colors.YELLOW}🐘 大文件筛选...{Colors.RESET}\n")
+        
+        # 让用户选择阈值
+        threshold_input = self.get_user_input("文件大小阈值 (GB)", default="20").strip()
+        try:
+            threshold_gb = float(threshold_input)
+        except ValueError:
+            threshold_gb = 20
+        threshold_bytes = threshold_gb * (1024**3)
+        
+        libs = self._request("/emby/Library/MediaFolders")
+        if not libs: 
+            print(f" {Colors.RED}❌ 无法获取媒体库信息。{Colors.RESET}")
+            self.pause()
+            return
+        
+        # 同时扫描电影和剧集
+        targets = [l for l in libs.get('Items', []) if l.get('CollectionType') in ['movies', 'tvshows']]
+        large_files = []
+        
         for lib in targets:
-            sys.stdout.write(f" ⏳ {lib.get('Name')}...\r"); sys.stdout.flush()
-            params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Movie', 'Fields': 'Path,MediaSources,Size'}
+            lib_name = lib.get('Name')
+            sys.stdout.write(f" ⏳ 扫描: {lib_name}...                    \r")
+            sys.stdout.flush()
+            
+            ctype = lib.get('CollectionType')
+            item_type = 'Episode' if ctype == 'tvshows' else 'Movie'
+            params = {
+                'ParentId': lib['Id'], 
+                'Recursive': 'true', 
+                'IncludeItemTypes': item_type, 
+                'Fields': 'Path,MediaSources,Size,SeriesName'
+            }
             items = self._fetch_all_items("/emby/Items", params)
-            for i in items:
-                if i.get('Size', 0) > 20*(1024**3): large.append(i)
-        print(f"\n {Colors.RED}⚠️  发现 {len(large)} 个 >20GB 文件。{Colors.RESET}"); self.pause()
+            
+            for item in items:
+                sources = item.get('MediaSources', [])
+                for source in sources:
+                    size = source.get('Size', 0)
+                    if size > threshold_bytes:
+                        display_name = item.get('Name', 'Unknown')
+                        if ctype == 'tvshows':
+                            series = item.get('SeriesName', '')
+                            if series:
+                                display_name = f"{series} - {display_name}"
+                        large_files.append({
+                            'id': item.get('Id'),
+                            'name': display_name,
+                            'size': size,
+                            'path': source.get('Path', ''),
+                            'lib': lib_name
+                        })
+        
+        sys.stdout.write("\r" + " " * 60 + "\r")
+        
+        if not large_files:
+            print(f" {Colors.GREEN}✅ 未发现大于 {threshold_gb}GB 的文件。{Colors.RESET}")
+            self.pause()
+            return
+        
+        # 按大小排序
+        large_files.sort(key=lambda x: x['size'], reverse=True)
+        total_size = sum(f['size'] for f in large_files)
+        
+        print(f"\n {Colors.RED}⚠️  发现 {len(large_files)} 个 >{threshold_gb}GB 文件，共占用 {self.format_size(total_size)}{Colors.RESET}\n")
+        
+        # 显示列表
+        print(f" {Colors.BOLD}{'序号':>4} | {'大小':>10} | {'媒体库':<12} | 名称{Colors.RESET}")
+        print(f" {Colors.DIM}{'-'*70}{Colors.RESET}")
+        
+        for i, f in enumerate(large_files[:30]):  # 只显示前30个
+            size_str = self.format_size(f['size'])
+            lib_short = f['lib'][:10] + '..' if len(f['lib']) > 12 else f['lib']
+            name_short = f['name'][:35] + '...' if len(f['name']) > 38 else f['name']
+            print(f" {Colors.CYAN}{i+1:>4}{Colors.RESET} | {Colors.RED}{size_str:>10}{Colors.RESET} | {lib_short:<12} | {name_short}")
+        
+        if len(large_files) > 30:
+            print(f"\n {Colors.DIM}... 还有 {len(large_files) - 30} 个文件未显示{Colors.RESET}")
+        
+        # 保存报告
+        report_path = os.path.join(self.data_dir, f"large_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+        try:
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write(f"🐘 大文件报告 (>{threshold_gb}GB)\n{'='*60}\n")
+                f.write(f"时间: {datetime.now()}\n")
+                f.write(f"文件数: {len(large_files)}, 总大小: {self.format_size(total_size)}\n\n")
+                for item in large_files:
+                    f.write(f"[{self.format_size(item['size'])}] {item['name']}\n")
+                    f.write(f"  路径: {item['path']}\n\n")
+            print(f"\n 📄 报告已保存: {report_path}")
+        except Exception as e:
+            print(f" {Colors.RED}保存报告失败: {e}{Colors.RESET}")
+        
+        self.pause()
 
     def run_no_chinese_scanner(self):
-        self.clear_screen(); self.print_banner(); print(f" {Colors.YELLOW}🈯 无中字检测...{Colors.RESET}")
-        libs = self._request("/emby/Library/MediaFolders"); 
-        if not libs: return
-        targets = [l for l in libs.get('Items', []) if l.get('CollectionType') in ['movies', 'tvshows']]
-        no_cn = []
+        self.clear_screen()
+        self.print_banner()
+        print(f" {Colors.YELLOW}🈯 无中字检测...{Colors.RESET}\n")
+        print(f" {Colors.DIM}说明: 检测没有中文字幕/音轨的资源{Colors.RESET}\n")
+        
+        # 选择扫描范围
+        print(f" 请选择扫描范围:")
+        print(f"   [1] 仅电影")
+        print(f"   [2] 仅剧集")
+        print(f"   [3] 全部")
+        scope = self.get_user_input("选择", default="1").strip()
+        
+        libs = self._request("/emby/Library/MediaFolders")
+        if not libs: 
+            print(f" {Colors.RED}❌ 无法获取媒体库信息。{Colors.RESET}")
+            self.pause()
+            return
+        
+        if scope == '1':
+            targets = [l for l in libs.get('Items', []) if l.get('CollectionType') == 'movies']
+            item_types = 'Movie'
+        elif scope == '2':
+            targets = [l for l in libs.get('Items', []) if l.get('CollectionType') == 'tvshows']
+            item_types = 'Episode'
+        else:
+            targets = [l for l in libs.get('Items', []) if l.get('CollectionType') in ['movies', 'tvshows']]
+            item_types = 'Movie,Episode'
+        
+        no_cn_items = []
+        total_scanned = 0
+        
         for lib in targets:
-            sys.stdout.write(f" ⏳ {lib.get('Name')}...\r"); sys.stdout.flush()
-            params = {'ParentId': lib['Id'], 'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'Path,MediaSources,Name,OriginalLanguage,ProductionLocations'}
-            items = self._fetch_all_items("/emby/Items", params, 2000)
-            for i in items:
-                if not self.has_chinese_content(i): no_cn.append(i.get('Name'))
-        print(f"\n {Colors.RED}⚠️  发现 {len(no_cn)} 个无中文资源。{Colors.RESET}"); self.pause()
+            lib_name = lib.get('Name')
+            sys.stdout.write(f" ⏳ 扫描: {lib_name}...                    \r")
+            sys.stdout.flush()
+            
+            params = {
+                'ParentId': lib['Id'], 
+                'Recursive': 'true', 
+                'IncludeItemTypes': item_types, 
+                'Fields': 'Path,MediaSources,Name,OriginalLanguage,ProductionLocations,SeriesName'
+            }
+            items = self._fetch_all_items("/emby/Items", params, 5000)
+            total_scanned += len(items)
+            
+            for item in items:
+                if not self.has_chinese_content(item):
+                    display_name = item.get('Name', 'Unknown')
+                    series = item.get('SeriesName', '')
+                    if series:
+                        display_name = f"{series} - {display_name}"
+                    no_cn_items.append({
+                        'id': item.get('Id'),
+                        'name': display_name,
+                        'path': item.get('Path', ''),
+                        'lib': lib_name
+                    })
+        
+        sys.stdout.write("\r" + " " * 60 + "\r")
+        
+        print(f"\n {Colors.CYAN}📊 扫描完成: 共 {total_scanned} 个资源{Colors.RESET}")
+        
+        if not no_cn_items:
+            print(f" {Colors.GREEN}✅ 所有资源都有中文内容！{Colors.RESET}")
+            self.pause()
+            return
+        
+        # 按库分组统计
+        lib_stats = defaultdict(int)
+        for item in no_cn_items:
+            lib_stats[item['lib']] += 1
+        
+        print(f"\n {Colors.RED}⚠️  发现 {len(no_cn_items)} 个无中文资源:{Colors.RESET}\n")
+        
+        for lib_name, count in sorted(lib_stats.items(), key=lambda x: -x[1]):
+            print(f"   📁 {lib_name}: {Colors.RED}{count}{Colors.RESET} 个")
+        
+        # 显示部分列表
+        print(f"\n {Colors.BOLD}部分列表 (前20个):{Colors.RESET}")
+        print(f" {Colors.DIM}{'-'*60}{Colors.RESET}")
+        for item in no_cn_items[:20]:
+            name_short = item['name'][:50] + '...' if len(item['name']) > 53 else item['name']
+            print(f"   • {name_short}")
+        
+        if len(no_cn_items) > 20:
+            print(f"\n {Colors.DIM}... 还有 {len(no_cn_items) - 20} 个未显示{Colors.RESET}")
+        
+        # 保存报告
+        report_path = os.path.join(self.data_dir, f"no_chinese_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+        try:
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write(f"🈯 无中文资源报告\n{'='*60}\n")
+                f.write(f"时间: {datetime.now()}\n")
+                f.write(f"扫描范围: {item_types}\n")
+                f.write(f"扫描总数: {total_scanned}\n")
+                f.write(f"无中文数: {len(no_cn_items)}\n\n")
+                
+                # 按库分组写入
+                for lib_name in sorted(lib_stats.keys()):
+                    f.write(f"\n📁 {lib_name} ({lib_stats[lib_name]} 个)\n{'-'*40}\n")
+                    for item in no_cn_items:
+                        if item['lib'] == lib_name:
+                            f.write(f"  • {item['name']}\n")
+                            if item['path']:
+                                f.write(f"    路径: {item['path']}\n")
+            print(f"\n 📄 报告已保存: {report_path}")
+        except Exception as e:
+            print(f" {Colors.RED}保存报告失败: {e}{Colors.RESET}")
+        
+        self.pause()
+
+    def refresh_library(self):
+        """刷新媒体库"""
+        self.clear_screen()
+        self.print_banner()
+        print(f" {Colors.YELLOW}🔄 刷新媒体库{Colors.RESET}\n")
+        
+        libs = self._request("/emby/Library/MediaFolders")
+        if not libs:
+            print(f" {Colors.RED}❌ 无法获取媒体库信息。{Colors.RESET}")
+            self.pause()
+            return
+        
+        all_libs = libs.get('Items', [])
+        print(f" 请选择要刷新的媒体库:\n")
+        print(f"   [0] 刷新全部媒体库")
+        for i, lib in enumerate(all_libs):
+            print(f"   [{i+1}] {lib.get('Name')} ({lib.get('CollectionType', 'unknown')})")
+        print(f"\n   [q] 取消")
+        
+        choice = self.get_user_input("选择").strip().lower()
+        
+        if choice == 'q':
+            return
+        
+        if not choice.isdigit():
+            print(f" {Colors.RED}无效选择{Colors.RESET}")
+            self.pause()
+            return
+        
+        idx = int(choice)
+        
+        if idx == 0:
+            # 刷新全部
+            print(f"\n 🔄 正在刷新全部媒体库...")
+            result = self._request("/emby/Library/Refresh", method='POST')
+            if result is not None:
+                print(f" {Colors.GREEN}✅ 已触发全库刷新！{Colors.RESET}")
+            else:
+                print(f" {Colors.RED}❌ 刷新失败{Colors.RESET}")
+        elif 1 <= idx <= len(all_libs):
+            lib = all_libs[idx - 1]
+            lib_id = lib.get('Id')
+            lib_name = lib.get('Name')
+            print(f"\n 🔄 正在刷新: {lib_name}...")
+            result = self._request(f"/emby/Items/{lib_id}/Refresh", method='POST')
+            if result is not None:
+                print(f" {Colors.GREEN}✅ 已触发刷新: {lib_name}{Colors.RESET}")
+            else:
+                print(f" {Colors.RED}❌ 刷新失败{Colors.RESET}")
+        else:
+            print(f" {Colors.RED}无效选择{Colors.RESET}")
+        
+        self.pause()
 
     # --- 菜单 ---
     def main_menu(self):
@@ -799,12 +1139,14 @@ class EmbyScannerPro:
             server_status = f"{Colors.GREEN}● 已连接{Colors.RESET}" if self.server_url else f"{Colors.RED}● 未配置{Colors.RESET}"
             print(f" {Colors.DIM}Server: {server_status}   Data: {self.data_dir}\n")
             print(f" {Colors.BOLD}--- 核心维护 ---{Colors.RESET}")
-            print(f" {Colors.CYAN}[1]{Colors.RESET} 🚀  重复文件扫描 (Dedupe)  {Colors.MAGENTA}[5]{Colors.RESET} 🔍  剧集缺集检查")
+            print(f" {Colors.CYAN}[1]{Colors.RESET} 🚀  重复文件扫描    {Colors.MAGENTA}[5]{Colors.RESET} 🔍  剧集缺集检查")
             print(f"\n {Colors.BOLD}--- 扩展工具 ---{Colors.RESET}")
-            print(f" {Colors.BLUE}[6]{Colors.RESET} 🧹  垃圾清理  {Colors.BLUE}[7]{Colors.RESET} 📊  透视分析  {Colors.BLUE}[8]{Colors.RESET} 🐘  大文件  {Colors.BLUE}[9]{Colors.RESET} 🈯  无中字检测")
+            print(f" {Colors.BLUE}[6]{Colors.RESET} 🧹  垃圾清理        {Colors.BLUE}[7]{Colors.RESET} 📊  透视分析")
+            print(f" {Colors.BLUE}[8]{Colors.RESET} 🐘  大文件筛选      {Colors.BLUE}[9]{Colors.RESET} 🈯  无中字检测")
+            print(f" {Colors.BLUE}[r]{Colors.RESET} 🔄  刷新媒体库")
             print(f"\n {Colors.BOLD}--- 系统设置 ---{Colors.RESET}")
             print(f" {Colors.DIM}[2] 配置  [3] 报告  [4] 重置  [0] 退出{Colors.RESET}\n")
-            c = self.get_user_input("请选择").strip()
+            c = self.get_user_input("请选择").strip().lower()
             if c=='1': self.run_scanner() if self.server_url else self.pause()
             elif c=='2': self.init_config() if self.setup_wizard() else None
             elif c=='3': self.view_reports()
@@ -814,6 +1156,7 @@ class EmbyScannerPro:
             elif c=='7': self.run_analytics()
             elif c=='8': self.run_large_file_scanner()
             elif c=='9': self.run_no_chinese_scanner()
+            elif c=='r': self.refresh_library()
             elif c=='0': sys.exit(0)
 
     def view_reports(self):
