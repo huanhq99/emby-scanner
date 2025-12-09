@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v3.8 Ultimate Edition (Dual Strategy)
+Emby媒体库重复检测工具 v4.0 Ultimate Edition (Dual Strategy + Web UI)
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 双重查重模式：
@@ -9,7 +9,7 @@ GitHub: https://github.com/huanhq99/emby-scanner
 2. 智能清理：
    - 剧集：同集模式下，自动保留【体积最大】且【文件名最长】的文件。
    - 电影：自动保留【文件名最长】的文件。
-3. 功能全集：登录深度删除 + 手动精选 + 缺集检查 + 媒体库透视。
+3. 功能全集：登录深度删除 + 手动精选 + 缺集检查 + 媒体库透视 + Web预览。
 """
 
 import os
@@ -22,6 +22,10 @@ import urllib.parse
 import unicodedata
 import re
 import getpass
+import threading
+import webbrowser
+import socket
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from collections import defaultdict
 from datetime import datetime
 
@@ -42,7 +46,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "3.8 Ultimate"
+        self.version = "4.0 Ultimate"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -53,6 +57,10 @@ class EmbyScannerPro:
         self.last_scan_results = {} 
         self.lib_types = {}
         self.scan_mode = "strict" # strict / loose
+        
+        # Web UI 相关
+        self.web_data = {}  # 存储用于 Web 展示的数据
+        self.web_server = None
 
         home_dir = os.environ.get('HOME')
         self.script_dir = home_dir if home_dir else os.path.expanduser('~')
@@ -583,10 +591,29 @@ class EmbyScannerPro:
 
     # --- 其他功能 ---
     def run_missing_check(self):
-        """缺集检查 - 优化版：批量获取所有剧集，减少API请求次数"""
+        """缺集检查 - 智能版：支持多种检测模式"""
         self.clear_screen()
         self.print_banner()
-        print(f" {Colors.YELLOW}🔍 检查缺集 (优化版)...{Colors.RESET}")
+        print(f" {Colors.YELLOW}🔍 检查缺集 (智能版)...{Colors.RESET}\n")
+        
+        # 选择检测模式
+        print(f" 请选择检测模式:")
+        print(f"   {Colors.GREEN}[1] 标准模式{Colors.RESET} - 检测从第1集到最大集号之间的缺集")
+        print(f"   {Colors.CYAN}[2] 宽容模式{Colors.RESET} - 只检测连续序列中的断档 (忽略开头缺集)")
+        print(f"   {Colors.MAGENTA}[3] 严格模式{Colors.RESET} - 只检测已有集数中间的缺集 (最精确)")
+        
+        mode = self.get_user_input("选择模式", default="1").strip()
+        if mode == '2':
+            check_mode = 'tolerant'
+            mode_desc = "宽容模式"
+        elif mode == '3':
+            check_mode = 'strict'
+            mode_desc = "严格模式"
+        else:
+            check_mode = 'standard'
+            mode_desc = "标准模式"
+        
+        print(f"\n {Colors.DIM}使用 {mode_desc} 进行检测...{Colors.RESET}")
         
         start_time = time.time()
         
@@ -604,11 +631,12 @@ class EmbyScannerPro:
         print(f"\n {Colors.DIM}┌" + "─"*22 + "┬" + "─"*12 + "┬" + "─"*14 + "┬" + "─"*17 + "┬" + "─"*10 + "┐" + f"{Colors.RESET}")
         print(f" {Colors.BOLD}│ {'媒体库名称':<20} │ {'剧集数':<10} │ {'缺集剧数':<10} │ {'缺集总数':<13} │ {'状态':<8} │{Colors.RESET}")
         print(f" {Colors.DIM}├" + "─"*22 + "┼" + "─"*12 + "┼" + "─"*14 + "┼" + "─"*17 + "┼" + "─"*10 + "┤" + f"{Colors.RESET}")
-        report_lines = ["🎬 Emby 缺集检测报告", "="*60, f"时间: {datetime.now()}", ""]
+        report_lines = ["🎬 Emby 缺集检测报告", "="*60, f"时间: {datetime.now()}", f"检测模式: {mode_desc}", ""]
         
         total_missing_episodes = 0  # 总缺集数
         total_series = 0            # 总剧集数（去重后的 Series）
         total_series_with_missing = 0  # 有缺集的剧数
+        all_missing_details = []    # 存储所有缺集详情供 Web 使用
         
         for lib in target_libs:
             lib_name = lib.get('Name')
@@ -616,30 +644,27 @@ class EmbyScannerPro:
             sys.stdout.flush()
             
             try:
-                # 步骤1: 获取所有剧集列表（Series，不是 Season）
-                series_params = {
+                # 步骤1: 使用 TotalRecordCount 获取准确的 Series 数量（不获取全部数据）
+                count_params = {
                     'ParentId': lib['Id'], 
                     'Recursive': 'true', 
-                    'IncludeItemTypes': 'Series',  # 只获取 Series，不是 Season
-                    'Fields': 'Name', 
-                    'Limit': 100000
+                    'IncludeItemTypes': 'Series',
+                    'Limit': 0  # 只获取数量，不获取数据
                 }
-                series_data = self._request("/emby/Items", series_params)
-                if not series_data: 
+                count_data = self._request("/emby/Items", count_params)
+                if not count_data: 
                     print(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text('N/A', 12)} │ {self.pad_text('请求失败', 14)} │ {self.pad_text('-', 17)} │ {self.pad_text('❌', 10)} │")
                     continue
                 
-                all_series = series_data.get('Items', [])
-                series_count = len(all_series)
+                # 使用 API 返回的 TotalRecordCount（与 Emby 界面一致）
+                series_count = count_data.get('TotalRecordCount', 0)
                 total_series += series_count
-                
-                # 创建 Series ID -> Name 映射
-                series_map = {s['Id']: s.get('Name', 'Unknown') for s in all_series}
                 
                 sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 批量获取剧集...                                  \r")
                 sys.stdout.flush()
                 
                 # 步骤2: 一次性批量获取该库下所有 Episode（关键优化！）
+                # Episode 自带 SeriesName，不需要单独获取 Series 列表
                 ep_params = {
                     'ParentId': lib['Id'], 
                     'Recursive': 'true', 
@@ -652,43 +677,73 @@ class EmbyScannerPro:
                 sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 分析 {len(all_episodes)} 集...                           \r")
                 sys.stdout.flush()
                 
-                # 步骤3: 按 SeriesId 分组
+                # 步骤3: 按 SeriesId 分组，同时收集 SeriesName
                 series_episodes = defaultdict(lambda: defaultdict(list))
+                series_names = {}  # SeriesId -> SeriesName 映射
                 for ep in all_episodes:
                     series_id = ep.get('SeriesId')
                     if not series_id:
                         continue
+                    # 收集 series name
+                    if series_id not in series_names:
+                        series_names[series_id] = ep.get('SeriesName', 'Unknown')
                     season = ep.get('ParentIndexNumber', 1)
                     episode = ep.get('IndexNumber')
                     if episode is not None:
                         series_episodes[series_id][season].append(episode)
                 
-                # 步骤4: 分析缺集
+                # 步骤4: 分析缺集（根据模式）
                 lib_missing_episodes = 0  # 该库缺集总数
                 lib_series_with_missing = 0  # 该库有缺集的剧数
                 lib_report_buffer = []
                 
                 for series_id, seasons in series_episodes.items():
-                    series_name = series_map.get(series_id, 'Unknown')
+                    series_name = series_names.get(series_id, 'Unknown')
                     series_missing = []
                     series_missing_count = 0
+                    series_missing_details = []
                     
                     for s in sorted(seasons.keys()):
-                        if s == 0 or s is None:
+                        if s == 0 or s is None:  # 跳过特别篇
                             continue
                         eps = sorted(set(seasons[s]))
                         if not eps:
                             continue
-                        max_ep = eps[-1]
-                        missing = sorted(list(set(range(1, max_ep + 1)) - set(eps)))
+                        
+                        missing = []
+                        if check_mode == 'standard':
+                            # 标准模式：检测从1到最大集号之间的所有缺集
+                            max_ep = eps[-1]
+                            missing = sorted(list(set(range(1, max_ep + 1)) - set(eps)))
+                        elif check_mode == 'tolerant':
+                            # 宽容模式：从第一个已有集开始检测到最后一个已有集
+                            min_ep = eps[0]
+                            max_ep = eps[-1]
+                            missing = sorted(list(set(range(min_ep, max_ep + 1)) - set(eps)))
+                        elif check_mode == 'strict':
+                            # 严格模式：只检测连续集数中间的断档
+                            # 例如：有 1,2,3,5,6 则只报告缺少 4
+                            for i in range(len(eps) - 1):
+                                gap_start = eps[i] + 1
+                                gap_end = eps[i + 1]
+                                if gap_end > gap_start:
+                                    missing.extend(range(gap_start, gap_end))
+                        
                         if missing:
                             series_missing_count += len(missing)
                             series_missing.append(f"  - S{s}: 缺 [{', '.join(map(str, missing))}]")
+                            series_missing_details.append({'season': s, 'missing': missing})
                     
                     if series_missing:
                         lib_missing_episodes += series_missing_count
                         lib_series_with_missing += 1
                         lib_report_buffer.append(f"📺 {series_name} (缺 {series_missing_count} 集)")
+                        all_missing_details.append({
+                            'series': series_name,
+                            'lib': lib_name,
+                            'missing_count': series_missing_count,
+                            'details': series_missing_details
+                        })
                         lib_report_buffer.extend(series_missing)
                         lib_report_buffer.append("")
                 
@@ -750,9 +805,38 @@ class EmbyScannerPro:
     def run_analytics(self):
         self.clear_screen()
         self.print_banner()
-        print(f" {Colors.YELLOW}📊 媒体库透视...{Colors.RESET}")
+        print(f" {Colors.YELLOW}📊 媒体库透视 (全面增强版)...{Colors.RESET}")
         
-        params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'MediaSources,Path'}
+        # 获取基础统计
+        print(f"\n {Colors.DIM}正在获取媒体库概览...{Colors.RESET}")
+        
+        libs = self._request("/emby/Library/MediaFolders")
+        if not libs:
+            print(f" {Colors.RED}❌ 无法获取媒体库信息。{Colors.RESET}")
+            self.pause()
+            return
+        
+        # 统计各类型数量
+        lib_stats = []
+        for lib in libs.get('Items', []):
+            lib_name = lib.get('Name')
+            lib_id = lib.get('Id')
+            ctype = lib.get('CollectionType', 'unknown')
+            
+            # 获取该库的统计
+            count_params = {'ParentId': lib_id, 'Recursive': 'true', 'Limit': 0}
+            if ctype == 'movies':
+                count_params['IncludeItemTypes'] = 'Movie'
+            elif ctype == 'tvshows':
+                count_params['IncludeItemTypes'] = 'Series'
+            else:
+                continue
+            
+            count_data = self._request("/emby/Items", count_params)
+            count = count_data.get('TotalRecordCount', 0) if count_data else 0
+            lib_stats.append({'name': lib_name, 'type': ctype, 'count': count})
+        
+        params = {'Recursive': 'true', 'IncludeItemTypes': 'Movie,Episode', 'Fields': 'MediaSources,Path,Container,Size,RunTimeTicks'}
         items = self._fetch_all_items("/emby/Items", params, 10000)
         if not items: 
             print(f" {Colors.RED}❌ 无法获取媒体信息。{Colors.RESET}")
@@ -762,16 +846,31 @@ class EmbyScannerPro:
         stats = {
             'Resolution': defaultdict(int), 
             'Codec': defaultdict(int),
+            'AudioCodec': defaultdict(int),
+            'Container': defaultdict(int),
             'SourceType': defaultdict(int), 
             'DynamicRange': defaultdict(int), 
-            'ReleaseGroup': defaultdict(int), 
+            'ReleaseGroup': defaultdict(int),
+            'FrameRate': defaultdict(int),
+            'BitDepth': defaultdict(int),
+            'AudioChannels': defaultdict(int),
             'TotalCount': 0,
-            'TotalSize': 0
+            'TotalSize': 0,
+            'TotalDuration': 0,
+            'Movies': 0,
+            'Episodes': 0,
+            'SizeByRes': defaultdict(int),
         }
         
-        print("\n 🔄 统计中...")
+        print(f" 🔄 分析 {len(items)} 个文件...")
         for item in items:
             stats['TotalCount'] += 1
+            item_type = item.get('Type', '')
+            if item_type == 'Movie':
+                stats['Movies'] += 1
+            else:
+                stats['Episodes'] += 1
+            
             sources = item.get('MediaSources', [])
             if not sources: continue
             source = sources[0]
@@ -781,13 +880,29 @@ class EmbyScannerPro:
             size = source.get('Size', 0)
             if size: stats['TotalSize'] += size
             
+            # 统计时长
+            runtime = item.get('RunTimeTicks', 0)
+            if runtime: stats['TotalDuration'] += runtime
+            
+            # 统计容器格式
+            container = source.get('Container', 'unknown').upper()
+            stats['Container'][container] += 1
+            
             # 统计来源类型
-            if 'REMUX' in path: stats['SourceType']['Remux'] += 1
-            elif 'BLURAY' in path or 'BLU-RAY' in path: stats['SourceType']['BluRay'] += 1
-            elif 'WEB-DL' in path or 'WEBDL' in path: stats['SourceType']['WEB-DL'] += 1
-            elif 'WEBRIP' in path: stats['SourceType']['WEBRip'] += 1
-            elif 'HDTV' in path: stats['SourceType']['HDTV'] += 1
-            else: stats['SourceType']['Other'] += 1
+            if 'REMUX' in path: 
+                stats['SourceType']['Remux'] += 1
+            elif 'BLURAY' in path or 'BLU-RAY' in path: 
+                stats['SourceType']['BluRay'] += 1
+            elif 'WEB-DL' in path or 'WEBDL' in path: 
+                stats['SourceType']['WEB-DL'] += 1
+            elif 'WEBRIP' in path: 
+                stats['SourceType']['WEBRip'] += 1
+            elif 'HDTV' in path: 
+                stats['SourceType']['HDTV'] += 1
+            elif 'DVDRIP' in path or 'DVD' in path:
+                stats['SourceType']['DVDRip'] += 1
+            else: 
+                stats['SourceType']['Other'] += 1
             
             # 统计制作组
             try:
@@ -803,83 +918,231 @@ class EmbyScannerPro:
             for stream in source.get('MediaStreams', []):
                 if stream.get('Type') == 'Video':
                     w = stream.get('Width', 0)
-                    if w >= 3800: res = "4K"
-                    elif w >= 1900: res = "1080P"
-                    elif w >= 1200: res = "720P"
-                    else: res = "SD"
+                    h = stream.get('Height', 0)
+                    if w >= 3800 or h >= 2100: 
+                        res = "4K"
+                    elif w >= 1900 or h >= 1000: 
+                        res = "1080P"
+                    elif w >= 1200 or h >= 700: 
+                        res = "720P"
+                    elif w >= 640:
+                        res = "480P"
+                    else: 
+                        res = "SD"
                     stats['Resolution'][res] += 1
+                    stats['SizeByRes'][res] += size
                     
                     # 编码
                     codec = stream.get('Codec', 'unknown').upper()
-                    if codec in ['HEVC', 'H265']: stats['Codec']['HEVC/H.265'] += 1
-                    elif codec in ['AVC', 'H264']: stats['Codec']['AVC/H.264'] += 1
-                    elif codec in ['AV1']: stats['Codec']['AV1'] += 1
-                    else: stats['Codec']['Other'] += 1
+                    if codec in ['HEVC', 'H265']: 
+                        stats['Codec']['HEVC/H.265'] += 1
+                    elif codec in ['AVC', 'H264']: 
+                        stats['Codec']['AVC/H.264'] += 1
+                    elif codec in ['AV1']: 
+                        stats['Codec']['AV1'] += 1
+                    elif codec in ['VP9']:
+                        stats['Codec']['VP9'] += 1
+                    elif codec in ['MPEG4', 'MPEG2VIDEO', 'MPEG2']:
+                        stats['Codec']['MPEG'] += 1
+                    else: 
+                        stats['Codec']['Other'] += 1
+                    
+                    # 帧率
+                    fps = stream.get('RealFrameRate') or stream.get('AverageFrameRate', 0)
+                    if fps:
+                        if fps >= 59:
+                            stats['FrameRate']['60fps'] += 1
+                        elif fps >= 49:
+                            stats['FrameRate']['50fps'] += 1
+                        elif fps >= 29:
+                            stats['FrameRate']['30fps'] += 1
+                        elif fps >= 23:
+                            stats['FrameRate']['24fps'] += 1
+                        else:
+                            stats['FrameRate']['其他'] += 1
+                    
+                    # 位深
+                    bit_depth = stream.get('BitDepth', 8)
+                    if bit_depth >= 10:
+                        stats['BitDepth']['10bit+'] += 1
+                    else:
+                        stats['BitDepth']['8bit'] += 1
                     
                     # HDR
                     vr = stream.get('VideoRange', '').upper()
                     vrt = stream.get('VideoRangeType', '').upper()
-                    if 'DOLBY' in vrt or 'DV' in vrt: stats['DynamicRange']['Dolby Vision'] += 1
-                    elif 'HDR10+' in vrt: stats['DynamicRange']['HDR10+'] += 1
-                    elif 'HDR' in vr: stats['DynamicRange']['HDR10'] += 1
-                    else: stats['DynamicRange']['SDR'] += 1
+                    if 'DOLBY' in vrt or 'DV' in vrt: 
+                        stats['DynamicRange']['Dolby Vision'] += 1
+                    elif 'HDR10+' in vrt or 'HDR10PLUS' in vrt: 
+                        stats['DynamicRange']['HDR10+'] += 1
+                    elif 'HDR' in vr or 'HDR10' in vrt: 
+                        stats['DynamicRange']['HDR10'] += 1
+                    elif 'HLG' in vrt:
+                        stats['DynamicRange']['HLG'] += 1
+                    else: 
+                        stats['DynamicRange']['SDR'] += 1
+                    break
+            
+            # 统计音频流信息
+            for stream in source.get('MediaStreams', []):
+                if stream.get('Type') == 'Audio':
+                    acodec = stream.get('Codec', 'unknown').upper()
+                    if 'TRUEHD' in acodec or 'ATMOS' in acodec:
+                        stats['AudioCodec']['TrueHD/Atmos'] += 1
+                    elif 'DTS' in acodec:
+                        if 'HD' in acodec or 'MA' in acodec:
+                            stats['AudioCodec']['DTS-HD MA'] += 1
+                        else:
+                            stats['AudioCodec']['DTS'] += 1
+                    elif 'AC3' in acodec or 'EAC3' in acodec:
+                        stats['AudioCodec']['AC3/EAC3'] += 1
+                    elif 'AAC' in acodec:
+                        stats['AudioCodec']['AAC'] += 1
+                    elif 'FLAC' in acodec:
+                        stats['AudioCodec']['FLAC'] += 1
+                    else:
+                        stats['AudioCodec']['Other'] += 1
+                    
+                    # 声道
+                    channels = stream.get('Channels', 2)
+                    if channels >= 8:
+                        stats['AudioChannels']['7.1'] += 1
+                    elif channels >= 6:
+                        stats['AudioChannels']['5.1'] += 1
+                    elif channels >= 2:
+                        stats['AudioChannels']['立体声'] += 1
+                    else:
+                        stats['AudioChannels']['单声道'] += 1
                     break
         
+        # 存储数据供 Web 使用
+        self.web_data['analytics'] = stats
+        self.web_data['lib_stats'] = lib_stats
+        
         # 显示统计结果
-        print(f"\n {Colors.BOLD}{'='*50}{Colors.RESET}")
-        print(f" {Colors.CYAN}📊 媒体库统计报告{Colors.RESET}")
-        print(f" {Colors.BOLD}{'='*50}{Colors.RESET}\n")
+        print(f"\n {Colors.BOLD}{'='*60}{Colors.RESET}")
+        print(f" {Colors.CYAN}📊 媒体库全面统计报告{Colors.RESET}")
+        print(f" {Colors.BOLD}{'='*60}{Colors.RESET}\n")
         
-        print(f" {Colors.BOLD}总览:{Colors.RESET}")
-        print(f"   总文件数: {Colors.GREEN}{stats['TotalCount']}{Colors.RESET}")
+        # 媒体库概览
+        print(f" {Colors.BOLD}📁 媒体库概览:{Colors.RESET}")
+        for lib in lib_stats:
+            icon = "🎬" if lib['type'] == 'movies' else "📺"
+            print(f"   {icon} {lib['name']}: {Colors.GREEN}{lib['count']}{Colors.RESET}")
+        
+        # 总览
+        total_hours = stats['TotalDuration'] / (10000000 * 3600) if stats['TotalDuration'] else 0
+        print(f"\n {Colors.BOLD}📈 总览:{Colors.RESET}")
+        print(f"   总文件数: {Colors.GREEN}{stats['TotalCount']}{Colors.RESET} (电影 {stats['Movies']}, 剧集 {stats['Episodes']})")
         print(f"   总容量: {Colors.GREEN}{self.format_size(stats['TotalSize'])}{Colors.RESET}")
+        print(f"   总时长: {Colors.GREEN}{total_hours:.1f} 小时{Colors.RESET} ({total_hours/24:.1f} 天)")
         
-        print(f"\n {Colors.BOLD}分辨率分布:{Colors.RESET}")
-        for res in ['4K', '1080P', '720P', 'SD']:
+        # 分辨率分布（带容量）
+        print(f"\n {Colors.BOLD}🖥️  分辨率分布:{Colors.RESET}")
+        for res in ['4K', '1080P', '720P', '480P', 'SD']:
             count = stats['Resolution'].get(res, 0)
+            size = stats['SizeByRes'].get(res, 0)
             pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
             bar = '█' * int(pct / 5) + '░' * (20 - int(pct / 5))
-            color = Colors.MAGENTA if res == '4K' else Colors.GREEN if res == '1080P' else Colors.RESET
-            print(f"   {color}{res:>6}{Colors.RESET}: {bar} {count:>6} ({pct:>5.1f}%)")
+            color = Colors.MAGENTA if res == '4K' else Colors.GREEN if res == '1080P' else Colors.YELLOW if res == '720P' else Colors.DIM
+            print(f"   {color}{res:>6}{Colors.RESET}: {bar} {count:>6} ({pct:>5.1f}%) | {self.format_size(size)}")
         
-        print(f"\n {Colors.BOLD}视频编码:{Colors.RESET}")
+        # 视频编码
+        print(f"\n {Colors.BOLD}🎞️  视频编码:{Colors.RESET}")
         for codec, count in sorted(stats['Codec'].items(), key=lambda x: -x[1]):
             pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
             print(f"   {codec:>12}: {count:>6} ({pct:>5.1f}%)")
         
-        print(f"\n {Colors.BOLD}动态范围:{Colors.RESET}")
-        for dr in ['Dolby Vision', 'HDR10+', 'HDR10', 'SDR']:
+        # 动态范围
+        print(f"\n {Colors.BOLD}🌈 动态范围:{Colors.RESET}")
+        for dr in ['Dolby Vision', 'HDR10+', 'HDR10', 'HLG', 'SDR']:
             count = stats['DynamicRange'].get(dr, 0)
             pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
             color = Colors.CYAN if 'Dolby' in dr else Colors.YELLOW if 'HDR' in dr else Colors.DIM
-            print(f"   {color}{dr:>12}{Colors.RESET}: {count:>6} ({pct:>5.1f}%)")
+            print(f"   {color}{dr:>14}{Colors.RESET}: {count:>6} ({pct:>5.1f}%)")
         
-        print(f"\n {Colors.BOLD}来源类型:{Colors.RESET}")
+        # 位深和帧率
+        print(f"\n {Colors.BOLD}🎨 位深 & 帧率:{Colors.RESET}")
+        for bd, count in sorted(stats['BitDepth'].items(), key=lambda x: -x[1]):
+            pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
+            color = Colors.CYAN if '10' in bd else Colors.RESET
+            print(f"   {color}{bd:>8}{Colors.RESET}: {count:>6} ({pct:>5.1f}%)")
+        for fr, count in sorted(stats['FrameRate'].items(), key=lambda x: -x[1]):
+            pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
+            color = Colors.GREEN if '60' in fr or '50' in fr else Colors.RESET
+            print(f"   {color}{fr:>8}{Colors.RESET}: {count:>6} ({pct:>5.1f}%)")
+        
+        # 音频编码
+        print(f"\n {Colors.BOLD}🔊 音频编码:{Colors.RESET}")
+        for ac, count in sorted(stats['AudioCodec'].items(), key=lambda x: -x[1])[:6]:
+            pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
+            color = Colors.MAGENTA if 'Atmos' in ac or 'TrueHD' in ac else Colors.CYAN if 'DTS' in ac else Colors.RESET
+            print(f"   {color}{ac:>14}{Colors.RESET}: {count:>6} ({pct:>5.1f}%)")
+        
+        # 声道
+        print(f"\n {Colors.BOLD}🎧 声道分布:{Colors.RESET}")
+        for ch in ['7.1', '5.1', '立体声', '单声道']:
+            count = stats['AudioChannels'].get(ch, 0)
+            pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
+            print(f"   {ch:>8}: {count:>6} ({pct:>5.1f}%)")
+        
+        # 来源类型
+        print(f"\n {Colors.BOLD}📀 来源类型:{Colors.RESET}")
         for src, count in sorted(stats['SourceType'].items(), key=lambda x: -x[1])[:6]:
             pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
-            print(f"   {src:>12}: {count:>6} ({pct:>5.1f}%)")
+            color = Colors.MAGENTA if src == 'Remux' else Colors.GREEN if 'WEB' in src else Colors.RESET
+            print(f"   {color}{src:>12}{Colors.RESET}: {count:>6} ({pct:>5.1f}%)")
+        
+        # 容器格式
+        print(f"\n {Colors.BOLD}📦 容器格式:{Colors.RESET}")
+        for fmt, count in sorted(stats['Container'].items(), key=lambda x: -x[1])[:5]:
+            pct = (count / stats['TotalCount'] * 100) if stats['TotalCount'] > 0 else 0
+            print(f"   {fmt:>12}: {count:>6} ({pct:>5.1f}%)")
         
         # TOP 制作组
         if stats['ReleaseGroup']:
-            print(f"\n {Colors.BOLD}TOP 10 制作组:{Colors.RESET}")
-            for group, count in sorted(stats['ReleaseGroup'].items(), key=lambda x: -x[1])[:10]:
-                print(f"   {Colors.BLUE}{group:>15}{Colors.RESET}: {count}")
+            print(f"\n {Colors.BOLD}👥 TOP 15 制作组:{Colors.RESET}")
+            for group, count in sorted(stats['ReleaseGroup'].items(), key=lambda x: -x[1])[:15]:
+                print(f"   {Colors.BLUE}{group:>18}{Colors.RESET}: {count}")
         
-        print(f"\n {Colors.BOLD}{'='*50}{Colors.RESET}")
+        print(f"\n {Colors.BOLD}{'='*60}{Colors.RESET}")
+        
+        # 提供 Web 预览选项
+        preview = self.get_user_input("是否在浏览器中预览? (y/n)", default="n").strip().lower()
+        if preview == 'y':
+            self.start_web_preview('analytics')
+        
         self.pause()
 
     def run_large_file_scanner(self):
         self.clear_screen()
         self.print_banner()
-        print(f" {Colors.YELLOW}🐘 大文件筛选...{Colors.RESET}\n")
+        print(f" {Colors.YELLOW}🐘 大文件筛选 (增强版)...{Colors.RESET}\n")
         
-        # 让用户选择阈值
-        threshold_input = self.get_user_input("文件大小阈值 (GB)", default="20").strip()
-        try:
-            threshold_gb = float(threshold_input)
-        except ValueError:
-            threshold_gb = 20
-        threshold_bytes = threshold_gb * (1024**3)
+        # 选择模式
+        print(f" 请选择筛选模式:")
+        print(f"   {Colors.GREEN}[1] 按大小筛选{Colors.RESET} - 大于指定 GB 的文件")
+        print(f"   {Colors.CYAN}[2] TOP N 最大文件{Colors.RESET} - 显示最大的 N 个文件")
+        print(f"   {Colors.MAGENTA}[3] 低质量大文件{Colors.RESET} - SD/720P 但大于 5GB 的文件 (可能需要压缩)")
+        
+        mode = self.get_user_input("选择模式", default="1").strip()
+        
+        if mode == '2':
+            top_n = int(self.get_user_input("显示前多少个?", default="50").strip() or 50)
+            threshold_bytes = 0
+            scan_mode = 'topn'
+        elif mode == '3':
+            threshold_bytes = 5 * (1024**3)  # 5GB
+            scan_mode = 'lowquality'
+        else:
+            threshold_input = self.get_user_input("文件大小阈值 (GB)", default="20").strip()
+            try:
+                threshold_gb = float(threshold_input)
+            except ValueError:
+                threshold_gb = 20
+            threshold_bytes = threshold_gb * (1024**3)
+            scan_mode = 'size'
+            top_n = 0
         
         libs = self._request("/emby/Library/MediaFolders")
         if not libs: 
@@ -902,7 +1165,7 @@ class EmbyScannerPro:
                 'ParentId': lib['Id'], 
                 'Recursive': 'true', 
                 'IncludeItemTypes': item_type, 
-                'Fields': 'Path,MediaSources,Size,SeriesName'
+                'Fields': 'Path,MediaSources,Size,SeriesName,RunTimeTicks'
             }
             items = self._fetch_all_items("/emby/Items", params)
             
@@ -910,66 +1173,136 @@ class EmbyScannerPro:
                 sources = item.get('MediaSources', [])
                 for source in sources:
                     size = source.get('Size', 0)
-                    if size > threshold_bytes:
+                    if not size:
+                        continue
+                    
+                    # 获取分辨率信息
+                    resolution = "Unknown"
+                    codec = "Unknown"
+                    for stream in source.get('MediaStreams', []):
+                        if stream.get('Type') == 'Video':
+                            w = stream.get('Width', 0)
+                            if w >= 3800: resolution = "4K"
+                            elif w >= 1900: resolution = "1080P"
+                            elif w >= 1200: resolution = "720P"
+                            else: resolution = "SD"
+                            codec = stream.get('Codec', 'unknown').upper()
+                            break
+                    
+                    # 根据模式决定是否添加
+                    should_add = False
+                    if scan_mode == 'size' and size > threshold_bytes:
+                        should_add = True
+                    elif scan_mode == 'topn':
+                        should_add = True
+                    elif scan_mode == 'lowquality' and size > threshold_bytes and resolution in ['SD', '720P']:
+                        should_add = True
+                    
+                    if should_add:
                         display_name = item.get('Name', 'Unknown')
                         if ctype == 'tvshows':
                             series = item.get('SeriesName', '')
                             if series:
                                 display_name = f"{series} - {display_name}"
+                        
+                        # 计算比特率
+                        runtime = item.get('RunTimeTicks', 0)
+                        bitrate = 0
+                        if runtime > 0:
+                            duration_sec = runtime / 10000000
+                            bitrate = (size * 8) / duration_sec / 1000000  # Mbps
+                        
                         large_files.append({
                             'id': item.get('Id'),
                             'name': display_name,
                             'size': size,
                             'path': source.get('Path', ''),
-                            'lib': lib_name
+                            'lib': lib_name,
+                            'resolution': resolution,
+                            'codec': codec,
+                            'bitrate': bitrate,
+                            'type': 'Episode' if ctype == 'tvshows' else 'Movie'
                         })
         
         sys.stdout.write("\r" + " " * 60 + "\r")
         
+        # 按大小排序
+        large_files.sort(key=lambda x: x['size'], reverse=True)
+        
+        # TOP N 模式截取
+        if scan_mode == 'topn':
+            large_files = large_files[:top_n]
+        
         if not large_files:
-            print(f" {Colors.GREEN}✅ 未发现大于 {threshold_gb}GB 的文件。{Colors.RESET}")
+            print(f" {Colors.GREEN}✅ 未发现符合条件的文件。{Colors.RESET}")
             self.pause()
             return
         
-        # 按大小排序
-        large_files.sort(key=lambda x: x['size'], reverse=True)
         total_size = sum(f['size'] for f in large_files)
         
-        print(f"\n {Colors.RED}⚠️  发现 {len(large_files)} 个 >{threshold_gb}GB 文件，共占用 {self.format_size(total_size)}{Colors.RESET}\n")
+        # 存储供 Web 使用
+        self.web_data['large_files'] = large_files
+        
+        # 统计信息
+        print(f"\n {Colors.RED}⚠️  发现 {len(large_files)} 个文件，共占用 {self.format_size(total_size)}{Colors.RESET}")
+        
+        # 按分辨率统计
+        res_stats = defaultdict(lambda: {'count': 0, 'size': 0})
+        for f in large_files:
+            res_stats[f['resolution']]['count'] += 1
+            res_stats[f['resolution']]['size'] += f['size']
+        
+        print(f"\n {Colors.BOLD}按分辨率统计:{Colors.RESET}")
+        for res in ['4K', '1080P', '720P', 'SD', 'Unknown']:
+            if res in res_stats:
+                print(f"   {res:>6}: {res_stats[res]['count']:>4} 个, {self.format_size(res_stats[res]['size'])}")
         
         # 显示列表
-        print(f" {Colors.BOLD}{'序号':>4} | {'大小':>10} | {'媒体库':<12} | 名称{Colors.RESET}")
-        print(f" {Colors.DIM}{'-'*70}{Colors.RESET}")
+        print(f"\n {Colors.BOLD}{'#':>3} | {'大小':>10} | {'码率':>8} | {'分辨率':>6} | {'类型':>6} | 名称{Colors.RESET}")
+        print(f" {Colors.DIM}{'-'*80}{Colors.RESET}")
         
-        for i, f in enumerate(large_files[:30]):  # 只显示前30个
+        for i, f in enumerate(large_files[:50]):
             size_str = self.format_size(f['size'])
-            lib_short = f['lib'][:10] + '..' if len(f['lib']) > 12 else f['lib']
-            name_short = f['name'][:35] + '...' if len(f['name']) > 38 else f['name']
-            print(f" {Colors.CYAN}{i+1:>4}{Colors.RESET} | {Colors.RED}{size_str:>10}{Colors.RESET} | {lib_short:<12} | {name_short}")
+            bitrate_str = f"{f['bitrate']:.1f}M" if f['bitrate'] else "N/A"
+            res_color = Colors.MAGENTA if f['resolution'] == '4K' else Colors.GREEN if f['resolution'] == '1080P' else Colors.YELLOW
+            name_short = f['name'][:30] + '...' if len(f['name']) > 33 else f['name']
+            ftype = "剧集" if f['type'] == 'Episode' else "电影"
+            print(f" {Colors.CYAN}{i+1:>3}{Colors.RESET} | {Colors.RED}{size_str:>10}{Colors.RESET} | {bitrate_str:>8} | {res_color}{f['resolution']:>6}{Colors.RESET} | {ftype:>6} | {name_short}")
         
-        if len(large_files) > 30:
-            print(f"\n {Colors.DIM}... 还有 {len(large_files) - 30} 个文件未显示{Colors.RESET}")
+        if len(large_files) > 50:
+            print(f"\n {Colors.DIM}... 还有 {len(large_files) - 50} 个文件未显示{Colors.RESET}")
         
         # 保存报告
         report_path = os.path.join(self.data_dir, f"large_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
         try:
             with open(report_path, 'w', encoding='utf-8') as f:
-                f.write(f"🐘 大文件报告 (>{threshold_gb}GB)\n{'='*60}\n")
+                f.write(f"🐘 大文件报告\n{'='*60}\n")
                 f.write(f"时间: {datetime.now()}\n")
                 f.write(f"文件数: {len(large_files)}, 总大小: {self.format_size(total_size)}\n\n")
+                f.write(f"按分辨率统计:\n")
+                for res in ['4K', '1080P', '720P', 'SD']:
+                    if res in res_stats:
+                        f.write(f"  {res}: {res_stats[res]['count']} 个, {self.format_size(res_stats[res]['size'])}\n")
+                f.write(f"\n{'='*60}\n详细列表:\n\n")
                 for item in large_files:
-                    f.write(f"[{self.format_size(item['size'])}] {item['name']}\n")
+                    bitrate_str = f"{item['bitrate']:.1f} Mbps" if item.get('bitrate') else "N/A"
+                    f.write(f"[{self.format_size(item['size'])}] [{item.get('resolution', 'N/A')}] [{bitrate_str}] {item['name']}\n")
                     f.write(f"  路径: {item['path']}\n\n")
             print(f"\n 📄 报告已保存: {report_path}")
         except Exception as e:
             print(f" {Colors.RED}保存报告失败: {e}{Colors.RESET}")
+        
+        # 提供 Web 预览选项
+        preview = self.get_user_input("是否在浏览器中预览? (y/n)", default="n").strip().lower()
+        if preview == 'y':
+            self.start_web_preview('large_files')
         
         self.pause()
 
     def run_no_chinese_scanner(self):
         self.clear_screen()
         self.print_banner()
-        print(f" {Colors.YELLOW}🈯 无中字检测...{Colors.RESET}\n")
+        print(f" {Colors.YELLOW}🈯 无中字检测 (增强版)...{Colors.RESET}\n")
         print(f" {Colors.DIM}说明: 检测没有中文字幕/音轨的资源{Colors.RESET}\n")
         
         # 选择扫描范围
@@ -978,6 +1311,13 @@ class EmbyScannerPro:
         print(f"   [2] 仅剧集")
         print(f"   [3] 全部")
         scope = self.get_user_input("选择", default="1").strip()
+        
+        # 选择检测模式
+        print(f"\n 请选择检测内容:")
+        print(f"   {Colors.GREEN}[1] 无中文字幕{Colors.RESET} - 检测没有中文字幕的资源")
+        print(f"   {Colors.CYAN}[2] 无中文音轨{Colors.RESET} - 检测没有中文配音的资源")
+        print(f"   {Colors.MAGENTA}[3] 两者都无{Colors.RESET} - 检测既无中文字幕也无中文音轨的资源")
+        detect_mode = self.get_user_input("选择", default="1").strip()
         
         libs = self._request("/emby/Library/MediaFolders")
         if not libs: 
@@ -1007,52 +1347,104 @@ class EmbyScannerPro:
                 'ParentId': lib['Id'], 
                 'Recursive': 'true', 
                 'IncludeItemTypes': item_types, 
-                'Fields': 'Path,MediaSources,Name,OriginalLanguage,ProductionLocations,SeriesName'
+                'Fields': 'Path,MediaSources,Name,OriginalLanguage,ProductionLocations,SeriesName,CommunityRating'
             }
             items = self._fetch_all_items("/emby/Items", params, 5000)
             total_scanned += len(items)
             
             for item in items:
-                if not self.has_chinese_content(item):
+                # 根据检测模式进行检查
+                has_cn_sub = False
+                has_cn_audio = False
+                
+                media_sources = item.get('MediaSources', [])
+                if media_sources:
+                    for source in media_sources:
+                        for stream in source.get('MediaStreams', []):
+                            stype = stream.get('Type')
+                            lang = (stream.get('Language') or '').lower()
+                            title = (stream.get('Title') or '').lower()
+                            display_title = (stream.get('DisplayTitle') or '').lower()
+                            
+                            is_chinese = lang in ['chi', 'zho', 'chn', 'zh', 'yue', 'wuu']
+                            cn_keywords = ['chinese', '中文', '简', '繁', 'chs', 'cht', 'hanzi', '中字', 'zh-cn', 'zh-tw', '国语', '普通话', '粤语', 'cantonese', 'mandarin']
+                            for kw in cn_keywords:
+                                if kw in title or kw in display_title:
+                                    is_chinese = True
+                                    break
+                            
+                            if stype == 'Subtitle' and is_chinese:
+                                has_cn_sub = True
+                            if stype == 'Audio' and is_chinese:
+                                has_cn_audio = True
+                
+                # 根据检测模式判断是否添加
+                should_add = False
+                if detect_mode == '1' and not has_cn_sub:  # 无中文字幕
+                    should_add = True
+                elif detect_mode == '2' and not has_cn_audio:  # 无中文音轨
+                    should_add = True
+                elif detect_mode == '3' and not has_cn_sub and not has_cn_audio:  # 两者都无
+                    should_add = True
+                
+                if should_add:
                     display_name = item.get('Name', 'Unknown')
                     series = item.get('SeriesName', '')
                     if series:
                         display_name = f"{series} - {display_name}"
+                    
+                    rating = item.get('CommunityRating', 0)
                     no_cn_items.append({
                         'id': item.get('Id'),
                         'name': display_name,
                         'path': item.get('Path', ''),
-                        'lib': lib_name
+                        'lib': lib_name,
+                        'rating': rating,
+                        'has_sub': has_cn_sub,
+                        'has_audio': has_cn_audio
                     })
         
         sys.stdout.write("\r" + " " * 60 + "\r")
         
         print(f"\n {Colors.CYAN}📊 扫描完成: 共 {total_scanned} 个资源{Colors.RESET}")
         
+        mode_desc = "无中文字幕" if detect_mode == '1' else "无中文音轨" if detect_mode == '2' else "无中文字幕且无中文音轨"
+        
         if not no_cn_items:
             print(f" {Colors.GREEN}✅ 所有资源都有中文内容！{Colors.RESET}")
             self.pause()
             return
+        
+        # 存储供 Web 使用
+        self.web_data['no_chinese'] = no_cn_items
         
         # 按库分组统计
         lib_stats = defaultdict(int)
         for item in no_cn_items:
             lib_stats[item['lib']] += 1
         
-        print(f"\n {Colors.RED}⚠️  发现 {len(no_cn_items)} 个无中文资源:{Colors.RESET}\n")
+        print(f"\n {Colors.RED}⚠️  发现 {len(no_cn_items)} 个{mode_desc}的资源:{Colors.RESET}\n")
         
         for lib_name, count in sorted(lib_stats.items(), key=lambda x: -x[1]):
             print(f"   📁 {lib_name}: {Colors.RED}{count}{Colors.RESET} 个")
         
-        # 显示部分列表
-        print(f"\n {Colors.BOLD}部分列表 (前20个):{Colors.RESET}")
-        print(f" {Colors.DIM}{'-'*60}{Colors.RESET}")
-        for item in no_cn_items[:20]:
-            name_short = item['name'][:50] + '...' if len(item['name']) > 53 else item['name']
-            print(f"   • {name_short}")
+        # 按评分排序（高分的更值得补字幕）
+        no_cn_items.sort(key=lambda x: x.get('rating', 0), reverse=True)
         
-        if len(no_cn_items) > 20:
-            print(f"\n {Colors.DIM}... 还有 {len(no_cn_items) - 20} 个未显示{Colors.RESET}")
+        # 显示部分列表
+        print(f"\n {Colors.BOLD}高分优先列表 (前30个):{Colors.RESET}")
+        print(f" {Colors.DIM}{'-'*70}{Colors.RESET}")
+        for i, item in enumerate(no_cn_items[:30]):
+            name_short = item['name'][:45] + '...' if len(item['name']) > 48 else item['name']
+            rating = item.get('rating', 0)
+            rating_str = f"{rating:.1f}" if rating else "N/A"
+            status = ""
+            if detect_mode == '3':
+                status = f"[{'有字幕' if item['has_sub'] else '无字幕'}|{'有配音' if item['has_audio'] else '无配音'}]"
+            print(f"   {Colors.CYAN}{i+1:>2}{Colors.RESET}. ⭐{rating_str:>4} | {name_short} {Colors.DIM}{status}{Colors.RESET}")
+        
+        if len(no_cn_items) > 30:
+            print(f"\n {Colors.DIM}... 还有 {len(no_cn_items) - 30} 个未显示{Colors.RESET}")
         
         # 保存报告
         report_path = os.path.join(self.data_dir, f"no_chinese_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
@@ -1061,20 +1453,34 @@ class EmbyScannerPro:
                 f.write(f"🈯 无中文资源报告\n{'='*60}\n")
                 f.write(f"时间: {datetime.now()}\n")
                 f.write(f"扫描范围: {item_types}\n")
+                f.write(f"检测模式: {mode_desc}\n")
                 f.write(f"扫描总数: {total_scanned}\n")
                 f.write(f"无中文数: {len(no_cn_items)}\n\n")
                 
+                # 按评分排序写入
+                f.write(f"按评分排序 (高分优先):\n{'='*60}\n")
+                for item in no_cn_items:
+                    rating = item.get('rating', 0)
+                    rating_str = f"⭐{rating:.1f}" if rating else "无评分"
+                    f.write(f"  [{rating_str}] {item['name']}\n")
+                    if item['path']:
+                        f.write(f"    路径: {item['path']}\n")
+                
                 # 按库分组写入
+                f.write(f"\n\n按媒体库分组:\n{'='*60}\n")
                 for lib_name in sorted(lib_stats.keys()):
                     f.write(f"\n📁 {lib_name} ({lib_stats[lib_name]} 个)\n{'-'*40}\n")
                     for item in no_cn_items:
                         if item['lib'] == lib_name:
                             f.write(f"  • {item['name']}\n")
-                            if item['path']:
-                                f.write(f"    路径: {item['path']}\n")
             print(f"\n 📄 报告已保存: {report_path}")
         except Exception as e:
             print(f" {Colors.RED}保存报告失败: {e}{Colors.RESET}")
+        
+        # 提供 Web 预览选项
+        preview = self.get_user_input("是否在浏览器中预览? (y/n)", default="n").strip().lower()
+        if preview == 'y':
+            self.start_web_preview('no_chinese')
         
         self.pause()
 
@@ -1132,6 +1538,233 @@ class EmbyScannerPro:
         
         self.pause()
 
+    # ==================== Web 预览功能 ====================
+    def generate_web_html(self, data_type):
+        """生成 Web 预览的 HTML 页面"""
+        html_template = '''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emby Scanner - {title}</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }}
+        .container {{ max-width: 1200px; margin: 0 auto; }}
+        h1 {{ 
+            text-align: center; 
+            margin-bottom: 30px;
+            background: linear-gradient(90deg, #00d9ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-size: 2.5em;
+        }}
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }}
+        .stat-card {{
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }}
+        .stat-value {{ font-size: 2em; font-weight: bold; color: #00ff88; }}
+        .stat-label {{ color: #aaa; margin-top: 5px; }}
+        .chart-section {{
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+        }}
+        .chart-title {{ font-size: 1.3em; margin-bottom: 15px; color: #00d9ff; }}
+        .bar-chart {{ display: flex; flex-direction: column; gap: 10px; }}
+        .bar-row {{ display: flex; align-items: center; gap: 10px; }}
+        .bar-label {{ width: 100px; text-align: right; font-size: 0.9em; }}
+        .bar-container {{ flex: 1; background: rgba(255,255,255,0.1); border-radius: 5px; height: 25px; overflow: hidden; }}
+        .bar {{ height: 100%; border-radius: 5px; display: flex; align-items: center; padding-left: 10px; font-size: 0.8em; }}
+        .bar-4k {{ background: linear-gradient(90deg, #ff00ff, #ff66ff); }}
+        .bar-1080p {{ background: linear-gradient(90deg, #00ff88, #66ffaa); }}
+        .bar-720p {{ background: linear-gradient(90deg, #ffaa00, #ffcc66); }}
+        .bar-sd {{ background: linear-gradient(90deg, #888, #aaa); }}
+        .bar-default {{ background: linear-gradient(90deg, #00d9ff, #66e0ff); }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
+        th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }}
+        th {{ background: rgba(0,217,255,0.2); color: #00d9ff; }}
+        tr:hover {{ background: rgba(255,255,255,0.05); }}
+        .tag {{ 
+            display: inline-block; 
+            padding: 3px 8px; 
+            border-radius: 5px; 
+            font-size: 0.8em;
+            margin-right: 5px;
+        }}
+        .tag-4k {{ background: #ff00ff; }}
+        .tag-1080p {{ background: #00ff88; color: #000; }}
+        .tag-720p {{ background: #ffaa00; color: #000; }}
+        .tag-sd {{ background: #888; }}
+        .footer {{ text-align: center; margin-top: 40px; color: #666; font-size: 0.9em; }}
+        .footer a {{ color: #00d9ff; text-decoration: none; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 {title}</h1>
+        {content}
+        <div class="footer">
+            Powered by <a href="https://github.com/huanhq99/emby-scanner">Emby Scanner v4.0</a>
+        </div>
+    </div>
+</body>
+</html>'''
+        
+        content = ""
+        title = "Emby Scanner"
+        
+        if data_type == 'analytics' and 'analytics' in self.web_data:
+            title = "媒体库透视分析"
+            stats = self.web_data['analytics']
+            lib_stats = self.web_data.get('lib_stats', [])
+            
+            total_hours = stats.get('TotalDuration', 0) / (10000000 * 3600) if stats.get('TotalDuration') else 0
+            
+            # 统计卡片
+            content += '<div class="stats-grid">'
+            content += f'<div class="stat-card"><div class="stat-value">{stats.get("TotalCount", 0):,}</div><div class="stat-label">总文件数</div></div>'
+            content += f'<div class="stat-card"><div class="stat-value">{stats.get("Movies", 0):,}</div><div class="stat-label">电影</div></div>'
+            content += f'<div class="stat-card"><div class="stat-value">{stats.get("Episodes", 0):,}</div><div class="stat-label">剧集</div></div>'
+            content += f'<div class="stat-card"><div class="stat-value">{self.format_size(stats.get("TotalSize", 0))}</div><div class="stat-label">总容量</div></div>'
+            content += f'<div class="stat-card"><div class="stat-value">{total_hours:.0f}h</div><div class="stat-label">总时长</div></div>'
+            content += '</div>'
+            
+            # 分辨率分布
+            content += '<div class="chart-section"><div class="chart-title">🖥️ 分辨率分布</div><div class="bar-chart">'
+            total = stats.get('TotalCount', 1)
+            for res in ['4K', '1080P', '720P', '480P', 'SD']:
+                count = stats.get('Resolution', {}).get(res, 0)
+                pct = (count / total * 100) if total > 0 else 0
+                bar_class = f"bar-{res.lower().replace('p', '')}" if res in ['4K', '1080P', '720P'] else 'bar-sd'
+                content += f'<div class="bar-row"><div class="bar-label">{res}</div><div class="bar-container"><div class="bar {bar_class}" style="width:{max(pct, 2)}%">{count:,} ({pct:.1f}%)</div></div></div>'
+            content += '</div></div>'
+            
+            # 编码分布
+            content += '<div class="chart-section"><div class="chart-title">🎞️ 视频编码</div><div class="bar-chart">'
+            for codec, count in sorted(stats.get('Codec', {}).items(), key=lambda x: -x[1])[:5]:
+                pct = (count / total * 100) if total > 0 else 0
+                content += f'<div class="bar-row"><div class="bar-label">{codec}</div><div class="bar-container"><div class="bar bar-default" style="width:{max(pct, 2)}%">{count:,} ({pct:.1f}%)</div></div></div>'
+            content += '</div></div>'
+            
+            # 动态范围
+            content += '<div class="chart-section"><div class="chart-title">🌈 动态范围 (HDR)</div><div class="bar-chart">'
+            for dr in ['Dolby Vision', 'HDR10+', 'HDR10', 'HLG', 'SDR']:
+                count = stats.get('DynamicRange', {}).get(dr, 0)
+                pct = (count / total * 100) if total > 0 else 0
+                content += f'<div class="bar-row"><div class="bar-label">{dr}</div><div class="bar-container"><div class="bar bar-default" style="width:{max(pct, 2)}%">{count:,} ({pct:.1f}%)</div></div></div>'
+            content += '</div></div>'
+            
+        elif data_type == 'large_files' and 'large_files' in self.web_data:
+            title = "大文件列表"
+            files = self.web_data['large_files']
+            total_size = sum(f['size'] for f in files)
+            
+            content += '<div class="stats-grid">'
+            content += f'<div class="stat-card"><div class="stat-value">{len(files)}</div><div class="stat-label">大文件数</div></div>'
+            content += f'<div class="stat-card"><div class="stat-value">{self.format_size(total_size)}</div><div class="stat-label">总占用</div></div>'
+            content += '</div>'
+            
+            content += '<div class="chart-section"><div class="chart-title">📋 文件列表</div>'
+            content += '<table><tr><th>#</th><th>名称</th><th>大小</th><th>分辨率</th><th>码率</th></tr>'
+            for i, f in enumerate(files[:100]):
+                res_class = f"tag-{f.get('resolution', 'sd').lower()}"
+                bitrate = f"{f.get('bitrate', 0):.1f} Mbps" if f.get('bitrate') else "N/A"
+                name = f['name'][:60] + '...' if len(f['name']) > 60 else f['name']
+                content += f'<tr><td>{i+1}</td><td>{name}</td><td>{self.format_size(f["size"])}</td><td><span class="tag {res_class}">{f.get("resolution", "N/A")}</span></td><td>{bitrate}</td></tr>'
+            content += '</table></div>'
+            
+        elif data_type == 'no_chinese' and 'no_chinese' in self.web_data:
+            title = "无中文资源列表"
+            items = self.web_data['no_chinese']
+            
+            content += '<div class="stats-grid">'
+            content += f'<div class="stat-card"><div class="stat-value">{len(items)}</div><div class="stat-label">无中文资源</div></div>'
+            content += '</div>'
+            
+            content += '<div class="chart-section"><div class="chart-title">📋 资源列表 (按评分排序)</div>'
+            content += '<table><tr><th>#</th><th>名称</th><th>评分</th><th>媒体库</th></tr>'
+            for i, item in enumerate(items[:100]):
+                rating = f"⭐ {item.get('rating', 0):.1f}" if item.get('rating') else "N/A"
+                name = item['name'][:50] + '...' if len(item['name']) > 50 else item['name']
+                content += f'<tr><td>{i+1}</td><td>{name}</td><td>{rating}</td><td>{item.get("lib", "N/A")}</td></tr>'
+            content += '</table></div>'
+        
+        return html_template.format(title=title, content=content)
+    
+    def start_web_preview(self, data_type):
+        """启动 Web 预览服务器"""
+        html_content = self.generate_web_html(data_type)
+        
+        # 保存 HTML 文件
+        html_path = os.path.join(self.data_dir, 'preview.html')
+        try:
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+        except Exception as e:
+            print(f" {Colors.RED}生成预览失败: {e}{Colors.RESET}")
+            return
+        
+        # 找一个可用端口
+        port = 8899
+        for p in range(8899, 8999):
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.bind(('127.0.0.1', p))
+                sock.close()
+                port = p
+                break
+            except:
+                continue
+        
+        # 创建简单的 HTTP 服务器
+        class PreviewHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html; charset=utf-8')
+                self.end_headers()
+                with open(html_path, 'rb') as f:
+                    self.wfile.write(f.read())
+            def log_message(self, format, *args):
+                pass  # 禁止日志输出
+        
+        server = HTTPServer(('127.0.0.1', port), PreviewHandler)
+        
+        # 在后台线程运行服务器
+        def serve():
+            server.handle_request()  # 只处理一个请求
+        
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        
+        url = f"http://127.0.0.1:{port}"
+        print(f"\n {Colors.GREEN}🌐 正在打开浏览器预览: {url}{Colors.RESET}")
+        
+        # 打开浏览器
+        try:
+            webbrowser.open(url)
+        except:
+            print(f" {Colors.YELLOW}请手动打开浏览器访问: {url}{Colors.RESET}")
+        
+        time.sleep(2)  # 等待浏览器加载
+
     # --- 菜单 ---
     def main_menu(self):
         while True:
@@ -1173,10 +1806,23 @@ class EmbyScannerPro:
         reports = []
         try:
             for f in os.listdir(self.data_dir):
-                if f.endswith('.txt') and ('report' in f or 'missing' in f):
+                if f.endswith('.txt'):
                     full_path = os.path.join(self.data_dir, f)
                     mtime = os.path.getmtime(full_path)
-                    reports.append((f, full_path, mtime))
+                    # 确定报告类型
+                    if 'missing' in f:
+                        rtype = "🔍 缺集"
+                    elif 'report' in f:
+                        rtype = "📋 查重"
+                    elif 'large' in f:
+                        rtype = "🐘 大文件"
+                    elif 'chinese' in f:
+                        rtype = "🈯 无中文"
+                    elif 'clean' in f:
+                        rtype = "🧹 清理"
+                    else:
+                        rtype = "📄 其他"
+                    reports.append((f, full_path, mtime, rtype))
         except Exception as e:
             print(f" {Colors.RED}❌ 读取目录失败: {e}{Colors.RESET}")
             self.pause()
@@ -1191,9 +1837,9 @@ class EmbyScannerPro:
         reports.sort(key=lambda x: x[2], reverse=True)
         
         print(f" {Colors.DIM}找到 {len(reports)} 个报告:{Colors.RESET}\n")
-        for i, (name, path, mtime) in enumerate(reports[:10]):  # 只显示最近10个
+        for i, (name, path, mtime, rtype) in enumerate(reports[:15]):  # 显示最近15个
             time_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
-            print(f"   [{i+1}] {name}  {Colors.DIM}({time_str}){Colors.RESET}")
+            print(f"   [{i+1:>2}] {rtype} {name}  {Colors.DIM}({time_str}){Colors.RESET}")
         
         print(f"\n   [0] 返回")
         
