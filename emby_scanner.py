@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Emby媒体库重复检测工具 v4.0 Ultimate Edition (Dual Strategy + Web UI)
+Emby媒体库重复检测工具 v4.1 Fixed Edition
 GitHub: https://github.com/huanhq99/emby-scanner
 核心功能: 
 1. 双重查重模式：
@@ -9,7 +9,7 @@ GitHub: https://github.com/huanhq99/emby-scanner
 2. 智能清理：
    - 剧集：同集模式下，自动保留【体积最大】且【文件名最长】的文件。
    - 电影：自动保留【文件名最长】的文件。
-3. 功能全集：登录深度删除 + 手动精选 + 缺集检查 + 媒体库透视 + Web预览。
+3. 功能全集：登录深度删除 + 手动精选 + 缺集检查(修复版) + 媒体库透视 + Web预览。
 """
 
 import os
@@ -48,7 +48,7 @@ class Colors:
 class EmbyScannerPro:
     
     def __init__(self):
-        self.version = "4.0 Ultimate"
+        self.version = "4.1 Fixed"
         self.github_url = "https://github.com/huanhq99/emby-scanner"
         self.server_url = ""
         self.api_key = ""
@@ -75,14 +75,14 @@ class EmbyScannerPro:
 
     def print_banner(self):
         logo = f"""
-{Colors.CYAN}   ______      _             {Colors.YELLOW}_____                                  {Colors.RESET}
+{Colors.CYAN}   ______       _             {Colors.YELLOW}_____                                  {Colors.RESET}
 {Colors.CYAN}  |  ____|    | |           {Colors.YELLOW}/ ____|                                 {Colors.RESET}
 {Colors.CYAN}  | |__   _ __| |__  _   _ {Colors.YELLOW}| (___   ___ __ _ _ __  _ __   ___ _ __  {Colors.RESET}
 {Colors.CYAN}  |  __| | '_ \ '_ \| | | | {Colors.YELLOW}\___ \ / __/ _` | '_ \| '_ \ / _ \ '__| {Colors.RESET}
 {Colors.CYAN}  | |____| | | | |_) | |_| | {Colors.YELLOW}____) | (_| (_| | | | | | | |  __/ |    {Colors.RESET}
 {Colors.CYAN}  |______|_| |_|_.__/ \__, |{Colors.YELLOW}|_____/ \___\__,_|_| |_|_| |_|\___|_|    {Colors.RESET}
-{Colors.CYAN}                       __/ |                                        {Colors.RESET}
-{Colors.CYAN}                      |___/                                         {Colors.RESET}
+{Colors.CYAN}                        __/ |                                             {Colors.RESET}
+{Colors.CYAN}                       |___/                                              {Colors.RESET}
         """
         info_bar = f"{Colors.BOLD}   Emby Scanner {Colors.MAGENTA}v{self.version}{Colors.RESET} {Colors.DIM}|{Colors.RESET} Dual Strategy {Colors.DIM}|{Colors.RESET} All-in-One"
         print(logo)
@@ -595,218 +595,161 @@ class EmbyScannerPro:
 
     # --- 其他功能 ---
     def run_missing_check(self):
-        """缺集检查 - 智能版：支持多种检测模式"""
+        """缺集检查 (修正版：修复多版本/多集文件误报)"""
         self.clear_screen()
         self.print_banner()
-        print(f" {Colors.YELLOW}🔍 检查缺集 (智能版)...{Colors.RESET}\n")
+        print(f" {Colors.YELLOW}🔍 检查缺集...{Colors.RESET}\n")
         
-        # 选择检测模式
+        # 1. 选择模式
         print(f" 请选择检测模式:")
-        print(f"   {Colors.GREEN}[1] 标准模式{Colors.RESET} - 检测从第1集到最大集号之间的缺集")
-        print(f"   {Colors.CYAN}[2] 宽容模式{Colors.RESET} - 只检测连续序列中的断档 (忽略开头缺集)")
-        print(f"   {Colors.MAGENTA}[3] 严格模式{Colors.RESET} - 只检测已有集数中间的缺集 (最精确)")
+        print(f"   {Colors.GREEN}[1] 标准模式{Colors.RESET} - (推荐) 检测第1集到最新一集之间的缺集")
+        print(f"   {Colors.CYAN}[2] 宽容模式{Colors.RESET} - 只检测现有集数中间的断档")
         
         mode = self.get_user_input("选择模式", default="1").strip()
-        if mode == '2':
-            check_mode = 'tolerant'
-            mode_desc = "宽容模式"
-        elif mode == '3':
-            check_mode = 'strict'
-            mode_desc = "严格模式"
-        else:
-            check_mode = 'standard'
-            mode_desc = "标准模式"
+        check_mode = 'tolerant' if mode == '2' else 'standard'
         
-        print(f"\n {Colors.DIM}使用 {mode_desc} 进行检测...{Colors.RESET}")
-        
-        start_time = time.time()
-        
+        # 2. 获取剧集库
         libs = self._request("/emby/Library/MediaFolders")
-        if not libs: 
-            print(f" {Colors.RED}❌ 无法获取媒体库信息。{Colors.RESET}")
-            self.pause()
-            return
+        if not libs: return
         target_libs = [l for l in libs.get('Items', []) if l.get('CollectionType') == 'tvshows']
-        if not target_libs: 
-            print(f" {Colors.RED}❌ 无剧集库。{Colors.RESET}")
+        
+        if not target_libs:
+            print(f" {Colors.RED}❌ 没有找到剧集类型的媒体库{Colors.RESET}")
             self.pause()
             return
         
+        # 表头
         print(f"\n {Colors.DIM}┌" + "─"*22 + "┬" + "─"*12 + "┬" + "─"*14 + "┬" + "─"*17 + "┬" + "─"*10 + "┐" + f"{Colors.RESET}")
         print(f" {Colors.BOLD}│ {'媒体库名称':<20} │ {'剧集数':<10} │ {'缺集剧数':<10} │ {'缺集总数':<13} │ {'状态':<8} │{Colors.RESET}")
         print(f" {Colors.DIM}├" + "─"*22 + "┼" + "─"*12 + "┼" + "─"*14 + "┼" + "─"*17 + "┼" + "─"*10 + "┤" + f"{Colors.RESET}")
-        report_lines = ["🎬 Emby 缺集检测报告", "="*60, f"时间: {datetime.now()}", f"检测模式: {mode_desc}", ""]
         
-        total_missing_episodes = 0  # 总缺集数
-        total_series = 0            # 总剧集数（去重后的 Series）
-        total_series_with_missing = 0  # 有缺集的剧数
-        all_missing_details = []    # 存储所有缺集详情供 Web 使用
+        report_lines = [f"缺集检测报告 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "="*60, ""]
+        all_missing_details = []
         
+        total_missing_count = 0
+        total_series_missing = 0
+
         for lib in target_libs:
             lib_name = lib.get('Name')
-            sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 批量加载中...                                    \r")
+            sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 扫描中...                                      \r")
             sys.stdout.flush()
+
+            # 3. 核心修改：请求字段增加 IndexNumberEnd 以支持多集文件 (S01E06-E10)
+            params = {
+                'ParentId': lib['Id'],
+                'Recursive': 'true',
+                'IncludeItemTypes': 'Episode',
+                'Fields': 'SeriesId,SeriesName,ParentIndexNumber,IndexNumber,IndexNumberEnd',
+                'Limit': 1000000
+            }
             
-            try:
-                # 步骤1: 使用 TotalRecordCount 获取准确的 Series 数量（不获取全部数据）
-                count_params = {
-                    'ParentId': lib['Id'], 
-                    'Recursive': 'true', 
-                    'IncludeItemTypes': 'Series',
-                    'Limit': 0  # 只获取数量，不获取数据
-                }
-                count_data = self._request("/emby/Items", count_params)
-                if not count_data: 
-                    print(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text('N/A', 12)} │ {self.pad_text('请求失败', 14)} │ {self.pad_text('-', 17)} │ {self.pad_text('❌', 10)} │")
-                    continue
+            all_episodes = self._fetch_all_items("/emby/Items", params, limit_per_page=5000)
+            
+            # 4. 数据处理：使用 Set 自动去重 (解决1-5集双版本的问题)
+            # 结构: series_map[SeriesId][SeasonNumber] = {1, 2, 3, 4, 5...}
+            series_map = defaultdict(lambda: defaultdict(set))
+            series_names = {}
+            
+            for ep in all_episodes:
+                sid = ep.get('SeriesId')
+                if not sid: continue
                 
-                # 使用 API 返回的 TotalRecordCount（与 Emby 界面一致）
-                series_count = count_data.get('TotalRecordCount', 0)
-                total_series += series_count
+                if sid not in series_names:
+                    series_names[sid] = ep.get('SeriesName', 'Unknown')
                 
-                sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 批量获取剧集...                                  \r")
-                sys.stdout.flush()
+                season = ep.get('ParentIndexNumber', 1)
+                idx_start = ep.get('IndexNumber')
+                idx_end = ep.get('IndexNumberEnd') # 获取结束集数
                 
-                # 步骤2: 一次性批量获取该库下所有 Episode（关键优化！）
-                # Episode 自带 SeriesName，不需要单独获取 Series 列表
-                ep_params = {
-                    'ParentId': lib['Id'], 
-                    'Recursive': 'true', 
-                    'IncludeItemTypes': 'Episode', 
-                    'Fields': 'SeriesId,SeriesName,ParentIndexNumber,IndexNumber',
-                    'Limit': 500000
-                }
-                all_episodes = self._fetch_all_items("/emby/Items", ep_params, limit_per_page=10000)
-                
-                sys.stdout.write(f" │ {self.pad_text(lib_name, 22)} │ 分析 {len(all_episodes)} 集...                           \r")
-                sys.stdout.flush()
-                
-                # 步骤3: 按 SeriesId 分组，同时收集 SeriesName
-                series_episodes = defaultdict(lambda: defaultdict(list))
-                series_names = {}  # SeriesId -> SeriesName 映射
-                for ep in all_episodes:
-                    series_id = ep.get('SeriesId')
-                    if not series_id:
-                        continue
-                    # 收集 series name
-                    if series_id not in series_names:
-                        series_names[series_id] = ep.get('SeriesName', 'Unknown')
-                    season = ep.get('ParentIndexNumber', 1)
-                    episode = ep.get('IndexNumber')
-                    if episode is not None:
-                        series_episodes[series_id][season].append(episode)
-                
-                # 步骤4: 分析缺集（根据模式）
-                lib_missing_episodes = 0  # 该库缺集总数
-                lib_series_with_missing = 0  # 该库有缺集的剧数
-                lib_report_buffer = []
-                
-                for series_id, seasons in series_episodes.items():
-                    series_name = series_names.get(series_id, 'Unknown')
-                    series_missing = []
-                    series_missing_count = 0
-                    series_missing_details = []
+                if idx_start is not None:
+                    # 放入 Set，自动去重。不管你有几个版本的第1集，Set里只有一个 1
+                    series_map[sid][season].add(idx_start)
                     
-                    for s in sorted(seasons.keys()):
-                        if s == 0 or s is None:  # 跳过特别篇
-                            continue
-                        eps = sorted(set(seasons[s]))
-                        if not eps:
-                            continue
-                        
-                        missing = []
-                        if check_mode == 'standard':
-                            # 标准模式：检测从1到最大集号之间的所有缺集
-                            max_ep = eps[-1]
-                            missing = sorted(list(set(range(1, max_ep + 1)) - set(eps)))
-                        elif check_mode == 'tolerant':
-                            # 宽容模式：从第一个已有集开始检测到最后一个已有集
-                            min_ep = eps[0]
-                            max_ep = eps[-1]
-                            missing = sorted(list(set(range(min_ep, max_ep + 1)) - set(eps)))
-                        elif check_mode == 'strict':
-                            # 严格模式：只检测连续集数中间的断档
-                            # 例如：有 1,2,3,5,6 则只报告缺少 4
-                            for i in range(len(eps) - 1):
-                                gap_start = eps[i] + 1
-                                gap_end = eps[i + 1]
-                                if gap_end > gap_start:
-                                    missing.extend(range(gap_start, gap_end))
-                        
-                        if missing:
-                            series_missing_count += len(missing)
-                            series_missing.append(f"  - S{s}: 缺 [{', '.join(map(str, missing))}]")
-                            series_missing_details.append({'season': s, 'missing': missing})
+                    # 核心修改：如果是多集文件 (如E06-E10)，把中间的集数也标记为“已有”
+                    if idx_end and idx_end > idx_start:
+                        for i in range(idx_start + 1, idx_end + 1):
+                            series_map[sid][season].add(i)
+            
+            # 5. 计算缺集
+            lib_missing_eps = 0
+            lib_missing_series = 0
+            lib_buffer = []
+            
+            for sid, seasons in series_map.items():
+                s_name = series_names.get(sid, 'Unknown')
+                series_has_missing = False
+                
+                for season_num, existing_set in seasons.items():
+                    if season_num == 0: continue # 跳过特别篇/Season 0
                     
-                    if series_missing:
-                        lib_missing_episodes += series_missing_count
-                        lib_series_with_missing += 1
-                        lib_report_buffer.append(f"📺 {series_name} (缺 {series_missing_count} 集)")
+                    if not existing_set: continue
+                    ep_list = sorted(list(existing_set))
+                    
+                    # 确定检查范围
+                    start_ep = 1 if check_mode == 'standard' else ep_list[0]
+                    end_ep = ep_list[-1]
+                    
+                    # 应该有的集数集合
+                    should_have_set = set(range(start_ep, end_ep + 1))
+                    
+                    # 缺少的 = 应该有的 - 实际有的
+                    missing_set = should_have_set - existing_set
+                    missing_list = sorted(list(missing_set))
+                    
+                    if missing_list:
+                        series_has_missing = True
+                        lib_missing_eps += len(missing_list)
+                        lib_buffer.append(f"  [{s_name}] S{season_num} 缺: {missing_list}")
+                        
+                        # 记录 Web 数据
                         all_missing_details.append({
-                            'series': series_name,
+                            'series': s_name,
                             'lib': lib_name,
-                            'missing_count': series_missing_count,
-                            'details': series_missing_details
+                            'missing_count': len(missing_list),
+                            'details': [{'season': season_num, 'missing': missing_list}]
                         })
-                        lib_report_buffer.extend(series_missing)
-                        lib_report_buffer.append("")
                 
-                total_missing_episodes += lib_missing_episodes
-                total_series_with_missing += lib_series_with_missing
-                
-                if lib_missing_episodes > 0:
-                    report_lines.append(f"📁 {lib_name} ({lib_series_with_missing} 部剧缺集，共缺 {lib_missing_episodes} 集)")
-                    report_lines.extend(lib_report_buffer)
-                    report_lines.append("-" * 40)
-                
-                status = f"{Colors.YELLOW}有缺集{Colors.RESET}" if lib_missing_episodes > 0 else f"{Colors.GREEN}完整{Colors.RESET}"
-                missing_series_str = f"{Colors.RED}{lib_series_with_missing} 部{Colors.RESET}" if lib_series_with_missing > 0 else "0"
-                missing_ep_str = f"{Colors.RED}{lib_missing_episodes} 集{Colors.RESET}" if lib_missing_episodes > 0 else "0"
-                
-                sys.stdout.write("\r" + " " * 100 + "\r")
-                row_str = f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(series_count), 12)} │ {self.pad_text(missing_series_str, 14)} │ {self.pad_text(missing_ep_str, 17)} │ {self.pad_text(status, 10)} │"
-                print(row_str)
-                
-            except Exception as e:
-                sys.stdout.write("\r" + " " * 100 + "\r")
-                print(f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text('错误', 12)} │ {self.pad_text('-', 14)} │ {self.pad_text(str(e)[:15], 17)} │ {self.pad_text('❌', 10)} │")
-                continue
-        
+                if series_has_missing:
+                    lib_missing_series += 1
+            
+            if lib_buffer:
+                report_lines.append(f"--- 媒体库: {lib_name} ---")
+                report_lines.extend(lib_buffer)
+                report_lines.append("")
+            
+            total_missing_count += lib_missing_eps
+            total_series_missing += lib_missing_series
+            
+            # 打印表格行
+            status = f"{Colors.GREEN}✔{Colors.RESET}" if lib_missing_eps == 0 else f"{Colors.YELLOW}⚠{Colors.RESET}"
+            row = f" │ {self.pad_text(lib_name, 22)} │ {self.pad_text(str(len(series_map)), 12)} │ {self.pad_text(str(lib_missing_series), 14)} │ {self.pad_text(str(lib_missing_eps), 17)} │ {self.pad_text(status, 10)} │"
+            sys.stdout.write("\r" + " "*100 + "\r")
+            print(row)
+
         print(f" {Colors.DIM}└" + "─"*22 + "┴" + "─"*12 + "┴" + "─"*14 + "┴" + "─"*17 + "┴" + "─"*10 + "┘" + f"{Colors.RESET}")
         
-        elapsed = time.time() - start_time
-        print(f"\n {Colors.CYAN}📊 汇总: {total_series} 部剧集，{Colors.RED}{total_series_with_missing}{Colors.RESET}{Colors.CYAN} 部有缺集，共缺 {Colors.RED}{total_missing_episodes}{Colors.RESET}{Colors.CYAN} 集{Colors.RESET}")
-        print(f" {Colors.DIM}⏱️  耗时: {elapsed:.2f} 秒{Colors.RESET}")
-        
-        # 存储数据供 Web 使用
+        # 6. 保存报告和 Web 数据更新
         self.web_data['missing'] = {
-            'total_series': total_series,
-            'total_series_with_missing': total_series_with_missing,
-            'total_missing_episodes': total_missing_episodes,
+            'total_series': len(series_map) if 'series_map' in locals() else 0,
+            'total_series_with_missing': total_series_missing,
+            'total_missing_episodes': total_missing_count,
             'details': all_missing_details,
-            'elapsed': elapsed
+            'elapsed': 0
         }
-        
-        try:
-            report_path = os.path.join(self.data_dir, f"missing_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
-            with open(report_path, 'w', encoding='utf-8') as f: 
-                f.write('\n'.join(report_lines))
-                f.write(f"\n\n{'='*60}\n")
-                f.write(f"汇总: {total_series} 部剧集\n")
-                f.write(f"缺集剧数: {total_series_with_missing} 部\n")
-                f.write(f"缺集总数: {total_missing_episodes} 集\n")
-                f.write(f"耗时: {elapsed:.2f} 秒\n")
-            print(f" 📄 缺集报告已保存: {report_path}")
-        except Exception as e:
-            print(f" {Colors.RED}保存报告失败: {e}{Colors.RESET}")
-        
-        # 提供 Web 预览选项
-        if total_series_with_missing > 0:
-            preview = self.get_user_input("是否在浏览器中预览? (y/n)", default="n").strip().lower()
-            if preview == 'y':
+
+        if total_missing_count > 0:
+            r_path = os.path.join(self.data_dir, f"missing_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+            try:
+                with open(r_path, 'w', encoding='utf-8') as f: f.write('\n'.join(report_lines))
+                print(f"\n 📄 详情报告已保存: {r_path}")
+            except: pass
+            
+            print(f"\n {Colors.CYAN}发现 {total_series_missing} 部剧集有缺集，共缺 {total_missing_count} 集{Colors.RESET}")
+            if self.get_user_input("是否在浏览器查看详情? (y/n)", "n") == 'y':
                 self.start_web_preview('missing')
-        
-        self.pause()
+        else:
+            print(f"\n {Colors.GREEN}🎉 完美！所有剧集完整无缺。{Colors.RESET}")
+            self.pause()
 
     def run_junk_cleaner(self):
         self.clear_screen(); self.print_banner(); print(f" {Colors.YELLOW}🧹 垃圾清理...{Colors.RESET}")
@@ -1175,7 +1118,7 @@ class EmbyScannerPro:
         
         for lib in targets:
             lib_name = lib.get('Name')
-            sys.stdout.write(f" ⏳ 扫描: {lib_name}...                    \r")
+            sys.stdout.write(f" ⏳ 扫描: {lib_name}...                     \r")
             sys.stdout.flush()
             
             ctype = lib.get('CollectionType')
@@ -1359,7 +1302,7 @@ class EmbyScannerPro:
         
         for lib in targets:
             lib_name = lib.get('Name')
-            sys.stdout.write(f" ⏳ 扫描: {lib_name}...                    \r")
+            sys.stdout.write(f" ⏳ 扫描: {lib_name}...                     \r")
             sys.stdout.flush()
             
             params = {
@@ -1929,11 +1872,11 @@ h1{{color:#4ecdc4;}}a{{color:#ffd93d;}}ul{{line-height:2;}}</style></head>
                 web_status = f"  {Colors.GREEN}Web: ●{Colors.RESET}"
             print(f" {Colors.DIM}Server: {server_status}{web_status}   Data: {self.data_dir}\n")
             print(f" {Colors.BOLD}--- 核心维护 ---{Colors.RESET}")
-            print(f" {Colors.CYAN}[1]{Colors.RESET} 🚀  重复文件扫描    {Colors.MAGENTA}[5]{Colors.RESET} 🔍  剧集缺集检查")
+            print(f" {Colors.CYAN}[1]{Colors.RESET} 🚀  重复文件扫描     {Colors.MAGENTA}[5]{Colors.RESET} 🔍  剧集缺集检查")
             print(f"\n {Colors.BOLD}--- 扩展工具 ---{Colors.RESET}")
-            print(f" {Colors.BLUE}[6]{Colors.RESET} 🧹  垃圾清理        {Colors.BLUE}[7]{Colors.RESET} 📊  透视分析")
-            print(f" {Colors.BLUE}[8]{Colors.RESET} 🐘  大文件筛选      {Colors.BLUE}[9]{Colors.RESET} 🈯  无中字检测")
-            print(f" {Colors.BLUE}[r]{Colors.RESET} 🔄  刷新媒体库      {Colors.BLUE}[w]{Colors.RESET} 🌐  Web报告")
+            print(f" {Colors.BLUE}[6]{Colors.RESET} 🧹  垃圾清理         {Colors.BLUE}[7]{Colors.RESET} 📊  透视分析")
+            print(f" {Colors.BLUE}[8]{Colors.RESET} 🐘  大文件筛选       {Colors.BLUE}[9]{Colors.RESET} 🈯  无中字检测")
+            print(f" {Colors.BLUE}[r]{Colors.RESET} 🔄  刷新媒体库       {Colors.BLUE}[w]{Colors.RESET} 🌐  Web报告")
             print(f"\n {Colors.BOLD}--- 系统设置 ---{Colors.RESET}")
             print(f" {Colors.DIM}[2] 配置  [3] 报告  [4] 重置  [0] 退出{Colors.RESET}\n")
             c = self.get_user_input("请选择").strip().lower()
